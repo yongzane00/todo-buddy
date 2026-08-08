@@ -58,6 +58,25 @@ def application_stylesheet() -> str:
             image: none;
             width: 0px;
         }}
+        QToolButton#addQuestButton {{
+            border: 1px dashed {RULE};
+            border-radius: 7px;
+            color: {MUTED};
+            padding: 4px 8px;
+        }}
+        QToolButton#addQuestButton:hover, QToolButton#addQuestButton:focus {{
+            border: 1px dashed {ACCENT};
+            background: rgba(255, 253, 248, 235);
+            color: {INK};
+        }}
+        QLineEdit#addQuestEditor {{
+            background: rgba(255, 253, 248, 235);
+            border: 1px solid {ACCENT};
+            border-radius: 7px;
+            color: {INK};
+            padding: 4px 8px;
+            selection-background-color: {ACCENT};
+        }}
         QProgressBar {{
             border: 1px solid {OUTLINE};
             border-radius: 5px;

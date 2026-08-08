@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QScrollArea,
     QSizePolicy,
+    QStackedWidget,
     QStyle,
     QSystemTrayIcon,
     QToolButton,
@@ -26,13 +27,15 @@ from PySide6.QtWidgets import (
 from todo_buddy.service import TaskService
 from todo_buddy.ui.card_widget import CardWidget, FooterWidget, TriangleTrim
 from todo_buddy.ui.cat_widget import CatWidget
-from todo_buddy.ui.dialogs import choose_phase, confirm_delete, confirm_reset, prompt_text
+from todo_buddy.ui.dialogs import confirm_delete, confirm_reset, prompt_text
 from todo_buddy.ui.task_list_widget import TaskListWidget
 from todo_buddy.ui.theme import INK, MUTED, OUTLINE, application_stylesheet
 
 
 CARD_WIDTH = 380
 CARD_HEIGHT = 680
+MINI_WIDTH = 76
+MINI_HEIGHT = 70
 
 
 def clamp_position(
@@ -104,6 +107,68 @@ class DragHeader(QWidget):
         super().mouseReleaseEvent(event)
 
 
+class MiniCatPage(QWidget):
+    """Hosts just the cat while the card is minimized.
+
+    A plain click restores the full card; a drag moves the window instead,
+    so releasing after a drag never triggers a restore.
+    """
+
+    clicked = Signal()
+    drag_started = Signal()
+    drag_finished = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._drag_offset: QPoint | None = None
+        self._press_position: QPoint | None = None
+        self._dragging = False
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Click to reopen Todo Buddy. Drag to move the cat.")
+        self.setAccessibleName("Reopen Todo Buddy")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 3, 6, 3)
+        layout.setSpacing(0)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            global_position = event.globalPosition().toPoint()
+            self._drag_offset = global_position - self.window().frameGeometry().topLeft()
+            self._press_position = global_position
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        global_position = event.globalPosition().toPoint()
+        if self._drag_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            if (
+                not self._dragging
+                and self._press_position is not None
+                and (global_position - self._press_position).manhattanLength()
+                >= QApplication.startDragDistance()
+            ):
+                self._dragging = True
+                self.drag_started.emit()
+            if self._dragging:
+                self.window().move(global_position - self._drag_offset)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        was_dragging = self._dragging
+        was_pressed = self._press_position is not None
+        self._drag_offset = None
+        self._press_position = None
+        self._dragging = False
+        if was_dragging:
+            self.drag_finished.emit()
+        elif was_pressed and event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -116,6 +181,9 @@ class MainWindow(QMainWindow):
         self.settings = settings or QSettings("TodoBuddy", "TodoBuddy")
         self._persist_position = restore_position
         self.tray_icon: QSystemTrayIcon | None = None
+        self._cat_minimized = False
+        self._cat_center_offset: QPoint | None = None
+        self._cat_layout_index = -1
         self.setWindowTitle("Todo Buddy")
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -135,9 +203,18 @@ class MainWindow(QMainWindow):
             self._restore_position()
 
     def _build_ui(self) -> None:
+        self.stack = QStackedWidget()
+        self.setCentralWidget(self.stack)
         card = CardWidget()
-        self.setCentralWidget(card)
+        self.card = card
+        self.stack.addWidget(card)
+        self.mini_page = MiniCatPage()
+        self.mini_page.clicked.connect(self._restore_from_cat)
+        self.mini_page.drag_started.connect(self._cat_angry)
+        self.mini_page.drag_finished.connect(self._cat_calm)
+        self.stack.addWidget(self.mini_page)
         root = QVBoxLayout(card)
+        self._card_layout = root
         root.setContentsMargins(16, 13, 16, 13)
         root.setSpacing(6)
 
@@ -160,7 +237,7 @@ class MainWindow(QMainWindow):
         minimize_button = QToolButton()
         minimize_button.setObjectName("minimizeButton")
         minimize_button.setText("_")
-        minimize_button.setToolTip("Minimize Todo Buddy")
+        minimize_button.setToolTip("Minimize to just the cat")
         minimize_button.setAccessibleName("Minimize Todo Buddy")
         minimize_button.setFixedSize(24, 24)
         minimize_button.clicked.connect(self._minimize)
@@ -211,6 +288,7 @@ class MainWindow(QMainWindow):
         scroll.viewport().setStyleSheet("background: transparent;")
         self.task_list = TaskListWidget()
         self.task_list.task_toggled.connect(self._set_task_completion)
+        self.task_list.task_add_requested.connect(self._add_task_inline)
         self.task_list.task_edit_requested.connect(self._edit_task)
         self.task_list.task_delete_requested.connect(self._delete_task)
         self.task_list.task_move_requested.connect(self._move_task)
@@ -267,9 +345,6 @@ class MainWindow(QMainWindow):
 
     def _show_menu(self) -> None:
         menu = QMenu(self)
-        add_task = menu.addAction("Add quest...")
-        add_task.setEnabled(bool(self.service.document.phases))
-        add_task.triggered.connect(self._add_task)
         menu.addAction("Add category...", self._add_phase)
         menu.addAction("Rename card...", self._rename)
         menu.addSeparator()
@@ -289,14 +364,13 @@ class MainWindow(QMainWindow):
         button = self.findChild(QToolButton, "menuButton")
         menu.exec(button.mapToGlobal(button.rect().bottomRight()))
 
-    def _add_task(self) -> None:
-        phase_id = choose_phase(self, self.service.document.phases)
-        if phase_id is None:
-            return
-        title = prompt_text(self, "Add quest", "Quest title:")
-        if title is None:
-            return
-        self._mutate(lambda: self.service.add_task(phase_id, title), "Could not add quest")
+    def _add_task_inline(self, phase_id: str, title: str, refocus: bool) -> None:
+        added = self._mutate(
+            lambda: self.service.add_task(phase_id, title), "Could not add quest"
+        )
+        if added and refocus:
+            # Enter commits and reopens the editor for rapid quest entry.
+            self.task_list.start_add_quest(phase_id)
 
     def _add_phase(self) -> None:
         title = prompt_text(self, "Add category", "Category name:")
@@ -474,10 +548,44 @@ class MainWindow(QMainWindow):
         self.tray_icon.show()
 
     def _minimize(self) -> None:
-        if self.tray_icon is not None:
-            self.hide()
-        else:
-            self.showMinimized()
+        """Collapse the card so only the animated cat stays on the desktop."""
+        if self._cat_minimized:
+            return
+        self._cat_minimized = True
+        self._cat_layout_index = self._card_layout.indexOf(self.cat)
+        self._cat_center_offset = self.cat.mapTo(
+            self, QPoint(self.cat.width() // 2, self.cat.height() // 2)
+        )
+        cat_center = self.pos() + self._cat_center_offset
+        self.mini_page.layout().addWidget(self.cat)
+        self.stack.setCurrentWidget(self.mini_page)
+        self.setFixedSize(MINI_WIDTH, MINI_HEIGHT)
+        # Keep the cat where it was on screen while the card vanishes.
+        target = cat_center - QPoint(MINI_WIDTH // 2, MINI_HEIGHT // 2)
+        self.move(clamp_position(target, MINI_WIDTH, MINI_HEIGHT, self._screen_geometries()))
+
+    def _restore_from_cat(self) -> None:
+        if not self._cat_minimized:
+            return
+        target = self._expanded_position()
+        self._cat_minimized = False
+        self._card_layout.insertWidget(self._cat_layout_index, self.cat)
+        self.stack.setCurrentWidget(self.card)
+        self.setFixedSize(CARD_WIDTH, CARD_HEIGHT)
+        self.move(clamp_position(target, CARD_WIDTH, CARD_HEIGHT, self._screen_geometries()))
+        self.raise_()
+        self.activateWindow()
+
+    def _expanded_position(self) -> QPoint:
+        """Top-left of the full card such that the cat stays where it is now."""
+        if not self._cat_minimized or self._cat_center_offset is None:
+            return self.pos()
+        mini_center = self.pos() + QPoint(MINI_WIDTH // 2, MINI_HEIGHT // 2)
+        return mini_center - self._cat_center_offset
+
+    def _screen_geometries(self) -> list[QRect]:
+        app = QApplication.instance()
+        return [screen.availableGeometry() for screen in app.screens()] if app else []
 
     def _tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason in (
@@ -487,14 +595,15 @@ class MainWindow(QMainWindow):
             self._restore_from_tray()
 
     def _restore_from_tray(self) -> None:
+        if self._cat_minimized:
+            self._restore_from_cat()
         self.showNormal()
         self.show()
         self.raise_()
         self.activateWindow()
 
     def _restore_position(self) -> None:
-        app = QApplication.instance()
-        screens = [screen.availableGeometry() for screen in app.screens()] if app else []
+        screens = self._screen_geometries()
         saved = self.settings.value("window/position")
         if isinstance(saved, QPoint):
             target = saved
@@ -512,7 +621,9 @@ class MainWindow(QMainWindow):
         if self.tray_icon is not None:
             self.tray_icon.hide()
         if self._persist_position:
-            self.settings.setValue("window/position", self.pos())
+            # While minimized to the cat, save where the full card would sit
+            # so the next launch reopens the card, not a stray corner.
+            self.settings.setValue("window/position", self._expanded_position())
             self.settings.sync()
         super().closeEvent(event)
         # quitOnLastWindowClosed only reacts to visible windows, so closing

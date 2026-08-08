@@ -3,16 +3,25 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import QMimeData, QPoint, QPointF, QRect, Qt
-from PySide6.QtGui import QDropEvent
+from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, QRect, QSettings, Qt
+from PySide6.QtGui import QDropEvent, QFocusEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QToolButton
 
 from todo_buddy.models import BuddyDocument, Phase, SyncMetadata, Task
 from todo_buddy.service import TaskService
-from todo_buddy.ui.main_window import MainWindow, clamp_position
+from todo_buddy.ui.main_window import (
+    CARD_HEIGHT,
+    CARD_WIDTH,
+    MINI_HEIGHT,
+    MINI_WIDTH,
+    MainWindow,
+    clamp_position,
+)
 from todo_buddy.ui.cat_widget import CatState, CatWidget
 from todo_buddy.ui.task_list_widget import (
     TASK_MIME_TYPE,
+    AddQuestRow,
     QuestCheckBox,
     TaskDropArea,
     TaskListWidget,
@@ -192,6 +201,140 @@ def test_main_window_has_minimize_control(app):
 
     assert button is not None
     assert button.accessibleName() == "Minimize Todo Buddy"
+    window.close()
+
+
+def test_minimize_collapses_to_cat_and_click_restores_in_place(app):
+    task_service, _ = service()
+    window = MainWindow(task_service, restore_position=False)
+    window.show()
+    app.processEvents()
+    area = QApplication.primaryScreen().availableGeometry()
+    origin = QPoint(area.left() + 50, area.top())
+    window.move(origin)
+
+    window.findChild(QToolButton, "minimizeButton").click()
+
+    assert window.stack.currentWidget() is window.mini_page
+    assert window.cat.parent() is window.mini_page
+    assert (window.width(), window.height()) == (MINI_WIDTH, MINI_HEIGHT)
+
+    QTest.mouseClick(window.mini_page, Qt.MouseButton.LeftButton)
+
+    assert window.stack.currentWidget() is window.card
+    assert window.card.isAncestorOf(window.cat)
+    assert (window.width(), window.height()) == (CARD_WIDTH, CARD_HEIGHT)
+    assert window.pos() == origin
+    window.close()
+
+
+def test_restore_from_tray_also_exits_cat_mode(app):
+    task_service, _ = service()
+    window = MainWindow(task_service, restore_position=False)
+    window.show()
+    app.processEvents()
+
+    window._minimize()
+    assert window.stack.currentWidget() is window.mini_page
+
+    window._restore_from_tray()
+
+    assert window.stack.currentWidget() is window.card
+    assert (window.width(), window.height()) == (CARD_WIDTH, CARD_HEIGHT)
+    window.close()
+
+
+def test_close_while_cat_minimized_saves_expanded_card_position(app, tmp_path):
+    task_service, _ = service()
+    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
+    window = MainWindow(task_service, settings=settings, restore_position=True)
+    window.show()
+    app.processEvents()
+    area = QApplication.primaryScreen().availableGeometry()
+    origin = QPoint(area.left() + 40, area.top())
+    window.move(origin)
+
+    window._minimize()
+    assert window.pos() != origin  # the mini window sits where the cat was
+    window.close()
+
+    assert settings.value("window/position") == origin
+
+
+def test_add_quest_row_commits_on_enter_and_cancels_on_escape(app):
+    task_service, _ = service()
+    widget = TaskListWidget()
+    widget.set_document(task_service.document)
+    submitted = []
+    widget.task_add_requested.connect(
+        lambda phase_id, title, refocus: submitted.append((phase_id, title, refocus))
+    )
+    row = widget.findChild(AddQuestRow, "add-quest-phase")
+
+    row.button.click()
+    assert row.button.isHidden()
+    assert not row.editor.isHidden()
+
+    row.editor.setText("  Feed Kumquat  ")
+    QTest.keyClick(row.editor, Qt.Key.Key_Return)
+    app.processEvents()
+
+    assert submitted == [("phase", "Feed Kumquat", True)]
+    assert row.editor.isHidden()
+    assert not row.button.isHidden()
+
+    row.button.click()
+    row.editor.setText("Never mind")
+    QTest.keyClick(row.editor, Qt.Key.Key_Escape)
+    app.processEvents()
+
+    assert submitted == [("phase", "Feed Kumquat", True)]
+    assert row.editor.isHidden()
+    assert not row.button.isHidden()
+
+
+def test_add_quest_row_commits_pending_text_when_focus_leaves(app):
+    task_service, _ = service()
+    widget = TaskListWidget()
+    widget.set_document(task_service.document)
+    submitted = []
+    widget.task_add_requested.connect(
+        lambda phase_id, title, refocus: submitted.append((phase_id, title, refocus))
+    )
+    row = widget.findChild(AddQuestRow, "add-quest-phase")
+
+    row.button.click()
+    row.editor.setText("Water plants")
+    QApplication.sendEvent(
+        row.editor, QFocusEvent(QEvent.Type.FocusOut, Qt.FocusReason.MouseFocusReason)
+    )
+    app.processEvents()
+
+    assert submitted == [("phase", "Water plants", False)]
+    assert row.editor.isHidden()
+
+
+def test_main_window_inline_add_persists_and_reopens_editor(app):
+    task_service, repository = service()
+    window = MainWindow(task_service, restore_position=False)
+    row = window.task_list.findChild(AddQuestRow, "add-quest-phase")
+
+    row.start_editing()
+    row.editor.setText("New quest")
+    QTest.keyClick(row.editor, Qt.Key.Key_Return)
+    app.processEvents()
+
+    assert repository.save_count == 1
+    assert [task.title for task in task_service.document.phases[0].tasks] == [
+        "Toggle me",
+        "New quest",
+    ]
+    open_editors = [
+        candidate
+        for candidate in window.task_list.findChildren(AddQuestRow, "add-quest-phase")
+        if not candidate.editor.isHidden()
+    ]
+    assert len(open_editors) == 1  # Enter reopens the editor for the next quest
     window.close()
 
 

@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMenu,
     QScrollArea,
     QSizePolicy,
@@ -73,6 +74,91 @@ class TaskRow(QWidget):
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         self._press_position = None
         super().mouseReleaseEvent(event)
+
+
+class _AddQuestEditor(QLineEdit):
+    escape_pressed = Signal()
+    focus_lost = Signal()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            self.escape_pressed.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def focusOutEvent(self, event) -> None:
+        super().focusOutEvent(event)
+        self.focus_lost.emit()
+
+
+class AddQuestRow(QWidget):
+    """Inline quest entry pinned under a category's tasks.
+
+    The button swaps to a line edit in place: Enter commits (and the editor
+    reopens for the next quest), Escape cancels, and clicking elsewhere
+    commits whatever non-blank text was typed.
+    """
+
+    quest_submitted = Signal(str, str, bool)  # phase_id, title, refocus
+
+    def __init__(self, phase_id: str, phase_title: str, parent=None):
+        super().__init__(parent)
+        self.phase_id = phase_id
+        self._finishing = False
+        self.setObjectName(f"add-quest-{phase_id}")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 0, 5, 0)
+        layout.setSpacing(0)
+
+        self.button = QToolButton()
+        self.button.setObjectName("addQuestButton")
+        self.button.setText("+ Add quest")
+        self.button.setToolTip(f"Add a quest to {phase_title}")
+        self.button.setAccessibleName(f"Add quest to {phase_title}")
+        self.button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.button.clicked.connect(self.start_editing)
+        layout.addWidget(self.button)
+
+        self.editor = _AddQuestEditor()
+        self.editor.setObjectName("addQuestEditor")
+        self.editor.setPlaceholderText("New quest, then Enter")
+        self.editor.setAccessibleName(f"New quest title for {phase_title}")
+        self.editor.hide()
+        self.editor.returnPressed.connect(lambda: self._finish(commit=True, refocus=True))
+        self.editor.escape_pressed.connect(lambda: self._finish(commit=False, refocus=False))
+        self.editor.focus_lost.connect(self._commit_on_blur)
+        layout.addWidget(self.editor)
+
+    def start_editing(self) -> None:
+        self.button.hide()
+        self.editor.clear()
+        self.editor.show()
+        self.editor.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _commit_on_blur(self) -> None:
+        if not self._finishing and not self.editor.isHidden():
+            self._finish(commit=True, refocus=False)
+
+    def _finish(self, commit: bool, refocus: bool) -> None:
+        if self._finishing:
+            return
+        # Hiding the editor fires focus_lost; the flag stops a double commit.
+        self._finishing = True
+        try:
+            title = self.editor.text().strip()
+            self.editor.clear()
+            self.editor.hide()
+            self.button.show()
+            if commit and title:
+                QTimer.singleShot(
+                    0,
+                    lambda phase_id=self.phase_id, value=title, again=refocus:
+                        self.quest_submitted.emit(phase_id, value, again),
+                )
+        finally:
+            self._finishing = False
 
 
 class TaskDropArea(QWidget):
@@ -206,6 +292,7 @@ class TaskDropArea(QWidget):
 
 class TaskListWidget(QWidget):
     task_toggled = Signal(str, bool)
+    task_add_requested = Signal(str, str, bool)  # phase_id, title, refocus
     task_edit_requested = Signal(str)
     task_delete_requested = Signal(str)
     task_move_requested = Signal(str, str, int)
@@ -244,8 +331,17 @@ class TaskListWidget(QWidget):
             )
             drop_area.task_dropped.connect(self.task_move_requested)
             section_layout.addWidget(drop_area)
+
+            add_row = AddQuestRow(phase.id, phase.title)
+            add_row.quest_submitted.connect(self.task_add_requested)
+            section_layout.addWidget(add_row)
             self._layout.addWidget(section)
         self._layout.addStretch(1)
+
+    def start_add_quest(self, phase_id: str) -> None:
+        row = self.findChild(AddQuestRow, f"add-quest-{phase_id}")
+        if row is not None:
+            row.start_editing()
 
     def _phase_heading(self, phase_id: str, title: str, color: str) -> QWidget:
         heading = QWidget()

@@ -1,12 +1,13 @@
 # Todo Buddy
 
-Todo Buddy is a Windows-based floating quest card. It keeps a
-small grouped checklist above normal desktop windows and stores everything in a
+Todo Buddy is one of my pet project... get it... (HAHAHA) A Windows-based floating quest card. 
+It keeps a small grouped todo checklist above normal desktop windows and stores everything in a
 readable JSON file. No account, network connection, or backend is required.
 
 This project is inspired by my oyen cat, **Kumquat**. I missed her while I
 was away at work, so I built a Buddy that works alongside me when I can't
-be with her, she naps, stretches awake, celebrates when you finished a quest, and gets grumpy about interruptions, just like she does.
+be with her, she naps, she stretches when she is awake, she celebrates when you finished a quest, and she gets grumpy about interruptions, just like she does.
+
 
 <p align="center">
   <img src="asset/cat_animation/kumquat.jpeg" alt="Kumquat, an oyen cat" width="360">
@@ -61,16 +62,21 @@ python -m todo_buddy
 - The `...` next to a quest lets you edit or delete it.
 - The `...` next to a category lets you rename it, pick a color, or delete it
   (along with everything in it).
-- The `...` in the header is the big menu: add quests or categories, rename
-  the card, mark everything complete/incomplete, or clear out finished quests.
-- `_` tucks the card into the system tray. Click the tray icon (or pick
-  `Show Todo Buddy` from its menu) to bring it back.
+- Hit the `+ Add quest` row at the bottom of any category to type a new quest
+  right there — no pop-ups. Enter adds it and keeps the box open for the next
+  one, Esc backs out, and clicking away just saves whatever you typed.
+- The `...` in the header is the big menu: add categories, rename the card,
+  mark everything complete/incomplete, or clear out finished quests.
+- `_` shrinks the whole card down to just the pixel cat, so Kumquat can hang
+  out on your desktop without the list. Click her to pop the card back open,
+  or drag her somewhere comfier first. The tray icon's `Show Todo Buddy`
+  brings the card back too.
 - `Reset sample data...` double-checks with you first, and keeps your old JSON
   around as `tasks.backup-YYYYMMDD-HHMMSS.json` just in case.
 - `X` and `Exit` both close the app for real.
 
-Pixel Kumquat has a life of her own: leave her alone for 20 seconds and she
-falls asleep, poke anything and she does a little wake-up stretch (a one-shot
+Kumquat has a life of her own: leave her alone for 20 seconds and she
+falls asleep, poke her and she does a little wake-up stretch (a one-shot
 `WAKE_UP` transition), finish a quest and she celebrates, drag the card around
 and she gets grumpy about it. All five moods play from sprite sheets in
 `asset/cat_animation/` — six 64x64 frames each, crunchy hard-edged pixel art
