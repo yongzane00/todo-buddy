@@ -7,15 +7,15 @@ import pytest
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
-from todo_companion.app import _install_interrupt_handling
-from todo_companion.models import CompanionDocument, Phase, SyncMetadata, Task
-from todo_companion.service import TaskService
-from todo_companion.ui.main_window import MainWindow
+from todo_buddy.app import _install_interrupt_handling
+from todo_buddy.models import BuddyDocument, Phase, SyncMetadata, Task
+from todo_buddy.service import TaskService
+from todo_buddy.ui.main_window import MainWindow
 
 
 class MemoryRepository:
     def __init__(self):
-        self.document = CompanionDocument(
+        self.document = BuddyDocument(
             schema_version=1,
             title="APP TEST QUEST",
             phases=[Phase(id="phase", title="PHASE 1: TEST", tasks=[Task(id="task", title="Toggle me")])],
@@ -23,10 +23,10 @@ class MemoryRepository:
         )
 
     def load(self):
-        return CompanionDocument.from_dict(self.document.to_dict())
+        return BuddyDocument.from_dict(self.document.to_dict())
 
     def save(self, document):
-        self.document = CompanionDocument.from_dict(document.to_dict())
+        self.document = BuddyDocument.from_dict(document.to_dict())
 
     def backup(self):
         return None

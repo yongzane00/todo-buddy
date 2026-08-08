@@ -3,10 +3,17 @@
 Input:  asset/cat_animation/_source/<NAME>.png  (e.g. a 1536x1024 render with a
         grey background, glow, blur, and ~6.5px pseudo-pixel blocks)
 Output: asset/cat_animation/<NAME>.png  (N frames x 64x64, hard {0,255} alpha,
-        snapped to the shared 6-color cat palette, no anti-aliasing, body
+        snapped to the shared 8-color cat palette, no anti-aliasing, body
         centered per frame, bottom on the shared baseline row 55)
 
-Canonical commands per state (add --preview to write a 6x review image):
+Current sheets come from one labeled 5-row grid image (rows in GRID_ROWS
+order; text labels at the left are stripped automatically):
+
+    python tools/build_cat_sheet.py Animated_kumquat.jpeg --grid
+
+Legacy per-state commands for single-row renders (the ones these consumed
+now live only in git history; add --preview to any command for a 6x review
+image):
 
     python tools/build_cat_sheet.py AWAKE_IDLE
     python tools/build_cat_sheet.py SLEEPING --glyph z
@@ -332,14 +339,50 @@ def redraw_glyphs(cell: np.ndarray) -> int:
     return replaced
 
 
+def load_masked(path: Path, exclude_red: bool = False) -> tuple[np.ndarray, np.ndarray]:
+    """Load a render and its sprite mask.
+
+    Renders with a real transparent background carry their own sprite mask;
+    color-based background separation is only for opaque (grey/checker-bg)
+    renders.
+    """
+    rgba = np.array(Image.open(path).convert("RGBA")).astype(int)
+    src = rgba[..., :3]
+    src_alpha = rgba[..., 3]
+    if (src_alpha < 128).any():
+        print(f"{path.name}: source has transparency; masking on alpha")
+        return src, src_alpha >= 128
+    return src, sprite_mask(src, exclude_red=exclude_red)
+
+
 def build(name: str, min_blob: int, preview: bool, glyph: str = "none", expected_frames: int = 6, align: str = "median") -> None:
-    src_path = SOURCE_DIR / f"{name}.png"
-    src = np.array(Image.open(src_path).convert("RGB")).astype(int)
-    mask = sprite_mask(src, exclude_red=glyph in ("anger", "heart"))
+    src, mask = load_masked(SOURCE_DIR / f"{name}.png", exclude_red=glyph in ("anger", "heart"))
+    process(name, src, mask, min_blob, preview, glyph, expected_frames, align)
+
+
+def process(
+    name: str,
+    src: np.ndarray,
+    mask: np.ndarray,
+    min_blob: int,
+    preview: bool,
+    glyph: str = "none",
+    expected_frames: int = 6,
+    align: str = "median",
+    scale_base: float | None = None,
+    strip_label: bool = False,
+) -> None:
     sat = src.max(2) - src.min(2)
     lum = src.mean(2)
-    orange = (sat > 100) & (src[..., 1] - src[..., 2] > 35)
-    cream = (lum > 180) & (sat > 50) & (sat < 130)
+    orange = (sat > 100) & (src[..., 1] - src[..., 2] > 35) & mask
+    cream = (lum > 180) & (sat > 50) & (sat < 130) & mask
+
+    # Grid rows carry an ink text label left of the first frame; it holds no
+    # orange, so everything left of the first orange column is label.
+    if strip_label:
+        first_orange = int(np.nonzero(orange.any(0))[0].min())
+        mask = mask.copy()
+        mask[:, : max(first_orange - 8, 0)] = False
 
     frames = detect_frames(mask, expected_frames)
     print(f"{name}: {len(frames)} frames detected: {frames}")
@@ -371,11 +414,12 @@ def build(name: str, min_blob: int, preview: bool, glyph: str = "none", expected
     # A pose taller than the canvas (jumping HAPPY cat) shrinks slightly
     # instead of clipping its ears; 3 output px of headroom covers the ink
     # outline that rides above the topmost orange pixel.
-    scale = SCALE
-    needed = (bottom_excl - min(body_top)) * SCALE + 3
+    base = scale_base if scale_base is not None else SCALE
+    scale = base
+    needed = (bottom_excl - min(body_top)) * base + 3
     if needed > BASELINE:
         scale = (BASELINE - 3) / (bottom_excl - min(body_top))
-        print(f"  pose exceeds canvas at shared scale; using {scale:.4f} (shared {SCALE:.4f})")
+        print(f"  pose exceeds canvas at base scale; using {scale:.4f} (base {base:.4f})")
 
     sheet = np.zeros((FRAME, FRAME * len(frames), 4), dtype=np.uint8)
     for i, (x0, x1) in enumerate(frames):
@@ -434,6 +478,82 @@ def build(name: str, min_blob: int, preview: bool, glyph: str = "none", expected
         print(f"saved preview {OUT_DIR / f'_preview_{name}.png'}")
 
 
+GRID_ROWS = ["AWAKE_IDLE", "SLEEPING", "HAPPY", "ANGRY", "WAKE_UP"]
+CAT_HEIGHT = 44  # output px the reference (idle) cat stands tall
+
+
+def _bands(orange: np.ndarray, merge_gap: int = 8, min_height: int = 20) -> list[tuple[int, int]]:
+    """Row bands from the orange body profile, expanded to claim glyph space.
+
+    Floating glyphs (sleep z's, hearts) rise arbitrarily close to the row
+    above, so gap thresholds on the full mask can't separate rows. Bodies
+    can: glyphs and text labels contain no orange. Each band then extends
+    upward to just below the previous body (claiming its own glyphs) and
+    slightly downward for the ink outline.
+    """
+    prof = orange.sum(1) > 2
+    runs: list[list[int]] = []
+    start = None
+    for y, filled in enumerate(prof):
+        if filled and start is None:
+            start = y
+        elif not filled and start is not None:
+            runs.append([start, y - 1])
+            start = None
+    if start is not None:
+        runs.append([start, orange.shape[0] - 1])
+    merged: list[list[int]] = []
+    for run in runs:
+        if merged and run[0] - merged[-1][1] <= merge_gap:
+            merged[-1][1] = run[1]
+        else:
+            merged.append(run)
+    bodies = [(y0, y1) for y0, y1 in merged if y1 - y0 + 1 >= min_height]
+
+    # The previous row's ink outline hangs ~6-9px below its orange body; start
+    # each band just past it (but before this row's own floating glyphs).
+    outline_pad = 10
+    bands = []
+    for i, (y0, y1) in enumerate(bodies):
+        top = max(0, y0 - 60) if i == 0 else bodies[i - 1][1] + outline_pad
+        bands.append((top, min(y1 + outline_pad - 1, orange.shape[0] - 1)))
+    return bands
+
+
+def build_grid(filename: str, min_blob: int, preview: bool) -> None:
+    """Process a single image holding all five state rows (labels at left).
+
+    Row order must match GRID_ROWS. One shared scale is derived from the
+    first (idle) row so every state keeps consistent pixel density.
+    """
+    src, mask = load_masked(SOURCE_DIR / filename)
+    sat = src.max(2) - src.min(2)
+    orange = (sat > 100) & (src[..., 1] - src[..., 2] > 35) & mask
+    bands = _bands(orange)
+    if len(bands) != len(GRID_ROWS):
+        raise SystemExit(f"expected {len(GRID_ROWS)} rows, found {len(bands)}: {bands}")
+
+    ref = bands[0]
+    ref_rows = np.nonzero(mask[ref[0]:ref[1] + 1].sum(1) > 2)[0]
+    ref_h = int(ref_rows.max() - ref_rows.min() + 1)
+    scale_base = CAT_HEIGHT / ref_h
+    print(f"grid: {len(bands)} rows, idle row {ref_h}px tall -> scale {scale_base:.4f}")
+
+    for (top, bottom), name in zip(bands, GRID_ROWS):
+        align = "per-frame" if name == "WAKE_UP" else "median"
+        process(
+            name,
+            src[top:bottom + 1],
+            mask[top:bottom + 1],
+            min_blob,
+            preview,
+            expected_frames=6,
+            align=align,
+            scale_base=scale_base,
+            strip_label=True,
+        )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("name", help="sheet name, e.g. SLEEPING (reads _source/<NAME>.png)")
@@ -454,5 +574,13 @@ if __name__ == "__main__":
         default="median",
         help="baseline: 'median' keeps airborne poses airborne; 'per-frame' grounds every frame",
     )
+    parser.add_argument(
+        "--grid",
+        action="store_true",
+        help="name is a full filename of one image holding all five labeled state rows",
+    )
     args = parser.parse_args()
-    build(args.name, args.min_blob, args.preview, args.glyph, args.frames, args.align)
+    if args.grid:
+        build_grid(args.name, args.min_blob, args.preview)
+    else:
+        build(args.name, args.min_blob, args.preview, args.glyph, args.frames, args.align)

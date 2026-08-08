@@ -1,6 +1,6 @@
 import pytest
 
-from todo_companion.integrations.microsoft_todo import (
+from todo_buddy.integrations.microsoft_todo import (
     GraphMappingError,
     completion_update_payload,
     map_graph_task,

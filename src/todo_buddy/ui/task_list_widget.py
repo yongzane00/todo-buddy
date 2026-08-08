@@ -17,11 +17,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from todo_companion.models import CompanionDocument, Task
-from todo_companion.ui.theme import ACCENT, COMPLETED, INK, OUTLINE, PAPER
+from todo_buddy.models import BuddyDocument, Task
+from todo_buddy.ui.theme import ACCENT, COMPLETED, INK, OUTLINE, PAPER
 
 
-TASK_MIME_TYPE = "application/x-todo-companion-task"
+TASK_MIME_TYPE = "application/x-todo-buddy-task"
 
 
 class QuestCheckBox(QCheckBox):
@@ -220,7 +220,7 @@ class TaskListWidget(QWidget):
         self._layout.setContentsMargins(1, 0, 3, 8)
         self._layout.setSpacing(11)
 
-    def set_document(self, document: CompanionDocument) -> None:
+    def set_document(self, document: BuddyDocument) -> None:
         self._clear()
         if not document.phases:
             empty = QLabel("NO CATEGORIES YET. USE THE MENU TO ADD ONE.")

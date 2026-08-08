@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from todo_companion.models import Task
+from todo_buddy.models import Task
 
 
 class GraphMappingError(ValueError):

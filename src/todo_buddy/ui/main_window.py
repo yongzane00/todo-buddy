@@ -23,12 +23,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from todo_companion.service import TaskService
-from todo_companion.ui.card_widget import CardWidget, FooterWidget, TriangleTrim
-from todo_companion.ui.cat_widget import CatWidget
-from todo_companion.ui.dialogs import choose_phase, confirm_delete, confirm_reset, prompt_text
-from todo_companion.ui.task_list_widget import TaskListWidget
-from todo_companion.ui.theme import INK, MUTED, OUTLINE, application_stylesheet
+from todo_buddy.service import TaskService
+from todo_buddy.ui.card_widget import CardWidget, FooterWidget, TriangleTrim
+from todo_buddy.ui.cat_widget import CatWidget
+from todo_buddy.ui.dialogs import choose_phase, confirm_delete, confirm_reset, prompt_text
+from todo_buddy.ui.task_list_widget import TaskListWidget
+from todo_buddy.ui.theme import INK, MUTED, OUTLINE, application_stylesheet
 
 
 CARD_WIDTH = 380
@@ -113,10 +113,10 @@ class MainWindow(QMainWindow):
     ):
         super().__init__()
         self.service = service
-        self.settings = settings or QSettings("TodoCompanion", "TodoCompanion")
+        self.settings = settings or QSettings("TodoBuddy", "TodoBuddy")
         self._persist_position = restore_position
         self.tray_icon: QSystemTrayIcon | None = None
-        self.setWindowTitle("Todo Companion")
+        self.setWindowTitle("Todo Buddy")
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -160,8 +160,8 @@ class MainWindow(QMainWindow):
         minimize_button = QToolButton()
         minimize_button.setObjectName("minimizeButton")
         minimize_button.setText("_")
-        minimize_button.setToolTip("Minimize Todo Companion")
-        minimize_button.setAccessibleName("Minimize Todo Companion")
+        minimize_button.setToolTip("Minimize Todo Buddy")
+        minimize_button.setAccessibleName("Minimize Todo Buddy")
         minimize_button.setFixedSize(24, 24)
         minimize_button.clicked.connect(self._minimize)
         header_layout.addWidget(minimize_button)
@@ -178,8 +178,8 @@ class MainWindow(QMainWindow):
         close_button = QToolButton()
         close_button.setObjectName("closeButton")
         close_button.setText("X")
-        close_button.setToolTip("Exit Todo Companion")
-        close_button.setAccessibleName("Exit Todo Companion")
+        close_button.setToolTip("Exit Todo Buddy")
+        close_button.setAccessibleName("Exit Todo Buddy")
         close_button.setFixedSize(24, 24)
         close_button.clicked.connect(self.close)
         header_layout.addWidget(close_button)
@@ -465,9 +465,9 @@ class MainWindow(QMainWindow):
         self.tray_icon.setIcon(
             QApplication.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogInfoView)
         )
-        self.tray_icon.setToolTip("Todo Companion")
+        self.tray_icon.setToolTip("Todo Buddy")
         tray_menu = QMenu()
-        tray_menu.addAction("Show Todo Companion", self._restore_from_tray)
+        tray_menu.addAction("Show Todo Buddy", self._restore_from_tray)
         tray_menu.addAction("Exit", self.close)
         self.tray_icon.setContextMenu(tray_menu)
         self.tray_icon.activated.connect(self._tray_activated)

@@ -8,7 +8,7 @@ from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import QWidget
 
-from todo_companion.ui.theme import INK
+from todo_buddy.ui.theme import INK
 
 
 class CatState(Enum):

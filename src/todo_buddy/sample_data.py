@@ -1,10 +1,10 @@
 from uuid import uuid4
 
-from todo_companion.models import CompanionDocument, Phase, SyncMetadata, Task
+from todo_buddy.models import BuddyDocument, Phase, SyncMetadata, Task
 
 
-def create_sample_document() -> CompanionDocument:
-    return CompanionDocument(
+def create_sample_document() -> BuddyDocument:
+    return BuddyDocument(
         schema_version=1,
         title="BUILD A THOUGHTFUL DEMO",
         phases=[

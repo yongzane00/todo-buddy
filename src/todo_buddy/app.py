@@ -6,12 +6,12 @@ import sys
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from todo_companion.paths import resolve_data_path
-from todo_companion.repository import JsonRepository, RepositoryError
-from todo_companion.sample_data import create_sample_document
-from todo_companion.service import TaskService
-from todo_companion.ui.main_window import MainWindow
-from todo_companion.ui.theme import application_stylesheet
+from todo_buddy.paths import migrate_legacy_data, resolve_data_path
+from todo_buddy.repository import JsonRepository, RepositoryError
+from todo_buddy.sample_data import create_sample_document
+from todo_buddy.service import TaskService
+from todo_buddy.ui.main_window import MainWindow
+from todo_buddy.ui.theme import application_stylesheet
 
 
 def _load_service(repository: JsonRepository) -> TaskService | None:
@@ -22,7 +22,7 @@ def _load_service(repository: JsonRepository) -> TaskService | None:
     except RepositoryError as error:
         response = QMessageBox.warning(
             None,
-            "Todo Companion data needs attention",
+            "Todo Buddy data needs attention",
             f"{error}\n\nRecover with fresh sample data? The current file will be backed up first.",
             QMessageBox.StandardButton.Reset | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
@@ -68,13 +68,15 @@ def _install_interrupt_handling(app: QApplication, window: MainWindow) -> QTimer
 
 def main() -> int:
     app = QApplication.instance() or QApplication(sys.argv)
-    app.setOrganizationName("TodoCompanion")
-    app.setApplicationName("Todo Companion")
+    app.setOrganizationName("TodoBuddy")
+    app.setApplicationName("Todo Buddy")
     app.setApplicationVersion("0.1.0")
     app.setQuitOnLastWindowClosed(True)
     app.setStyleSheet(application_stylesheet())
 
-    repository = JsonRepository(resolve_data_path(), create_sample_document)
+    data_path = resolve_data_path()
+    migrate_legacy_data(data_path)
+    repository = JsonRepository(data_path, create_sample_document)
     service = _load_service(repository)
     if service is None:
         return 1

@@ -2,8 +2,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from todo_companion.models import (
-    CompanionDocument,
+from todo_buddy.models import (
+    BuddyDocument,
     DocumentValidationError,
     Phase,
     SyncMetadata,
@@ -11,8 +11,8 @@ from todo_companion.models import (
 )
 
 
-def make_document() -> CompanionDocument:
-    return CompanionDocument(
+def make_document() -> BuddyDocument:
+    return BuddyDocument(
         schema_version=1,
         title="Ship a tiny app",
         phases=[
@@ -28,7 +28,7 @@ def make_document() -> CompanionDocument:
 
 
 def test_document_round_trip_preserves_content():
-    restored = CompanionDocument.from_dict(make_document().to_dict())
+    restored = BuddyDocument.from_dict(make_document().to_dict())
 
     assert restored.title == "Ship a tiny app"
     assert restored.phases[0].title == "PHASE 1: PLAN"
@@ -61,7 +61,7 @@ def test_task_completion_normalizes_utc_timestamp_and_clears_it():
 )
 def test_invalid_document_has_clear_error(payload, message):
     with pytest.raises(DocumentValidationError, match=message):
-        CompanionDocument.from_dict(payload)
+        BuddyDocument.from_dict(payload)
 
 
 def test_incomplete_task_cannot_retain_completion_timestamp():
@@ -69,19 +69,19 @@ def test_incomplete_task_cannot_retain_completion_timestamp():
     payload["phases"][0]["tasks"][0]["completed"] = False
 
     with pytest.raises(DocumentValidationError, match="completed_at"):
-        CompanionDocument.from_dict(payload)
+        BuddyDocument.from_dict(payload)
 
 
 def test_phase_color_round_trips_and_old_data_uses_default():
     payload = make_document().to_dict()
     payload["phases"][0]["color"] = "#2F6FED"
 
-    restored = CompanionDocument.from_dict(payload)
+    restored = BuddyDocument.from_dict(payload)
     assert restored.phases[0].color == "#2F6FED"
     assert restored.to_dict()["phases"][0]["color"] == "#2F6FED"
 
     del payload["phases"][0]["color"]
-    assert CompanionDocument.from_dict(payload).phases[0].color is None
+    assert BuddyDocument.from_dict(payload).phases[0].color is None
 
 
 @pytest.mark.parametrize("color", ["red", "#123", "#GG0000", 42])
@@ -90,4 +90,4 @@ def test_invalid_phase_color_is_rejected(color):
     payload["phases"][0]["color"] = color
 
     with pytest.raises(DocumentValidationError, match="color"):
-        CompanionDocument.from_dict(payload)
+        BuddyDocument.from_dict(payload)

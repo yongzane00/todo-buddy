@@ -1,7 +1,7 @@
 # Cat animation sprite sheets
 
 Each PNG in this folder is one animation state for the companion cat in
-`src/todo_companion/ui/cat_widget.py`:
+`src/todo_buddy/ui/cat_widget.py`:
 
 | Sheet | State | Played when |
 | --- | --- | --- |
@@ -26,20 +26,23 @@ original Qt-painted cat if a sheet is missing or malformed:
 
 ## Regenerating
 
-`_source/` holds the raw AI renders (1536x1024, grey background, glow). The
-build tool masks out the background, resamples onto a true pixel grid,
-palette-snaps every pixel, and re-stamps floating glyphs that don't survive
-the downscale:
+All five sheets come from one grid image, `_source/Animated_kumquat.jpeg`
+(five labeled rows in AWAKE_IDLE / SLEEPING / HAPPY / ANGRY / WAKE_UP order,
+six frames per row). The build tool separates the sprite from the background,
+strips the row labels, resamples onto a true pixel grid at one shared scale,
+and palette-snaps every pixel:
 
 ```
 pip install -e ".[tools]"
-python tools/build_cat_sheet.py AWAKE_IDLE
-python tools/build_cat_sheet.py SLEEPING --glyph z
-python tools/build_cat_sheet.py WAKE_UP  --align per-frame
-python tools/build_cat_sheet.py HAPPY    --glyph heart --min-blob 25
-python tools/build_cat_sheet.py ANGRY    --glyph anger --min-blob 12
+python tools/build_cat_sheet.py Animated_kumquat.jpeg --grid
 ```
 
-Add `--preview` to any command to also write an ignored `_preview_<NAME>.png`
-at 6x for review. To add a new state, drop a render in `_source/`, build it,
-and map the state to the filename in `_SPRITE_FILES` in `cat_widget.py`.
+Add `--preview` to also write ignored `_preview_<NAME>.png` review images at
+6x. To swap in new art, replace the grid image (any name works — pass it to
+`--grid`) and rebuild; row labels are stripped automatically because they
+contain no orange. The tool also has a legacy per-state mode
+(`python tools/build_cat_sheet.py <NAME> [--glyph z|heart|anger]`) that reads
+`_source/<NAME>.png` single-row renders; the old renders it consumed now live
+only in git history. To add a new state, add a row to the grid (and its name
+to `GRID_ROWS` in the tool), then map the state to the filename in
+`_SPRITE_FILES` in `cat_widget.py`.

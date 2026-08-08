@@ -182,7 +182,7 @@ class SyncMetadata:
 
 
 @dataclass
-class CompanionDocument:
+class BuddyDocument:
     schema_version: int
     title: str
     phases: list[Phase]
@@ -197,7 +197,7 @@ class CompanionDocument:
         }
 
     @classmethod
-    def from_dict(cls, value: Any) -> CompanionDocument:
+    def from_dict(cls, value: Any) -> BuddyDocument:
         data = _mapping(value, "document")
         if "schema_version" not in data:
             raise DocumentValidationError("schema_version is required")

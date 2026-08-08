@@ -2,12 +2,12 @@ import json
 
 import pytest
 
-from todo_companion.models import CompanionDocument, Phase, SyncMetadata, Task
-from todo_companion.repository import JsonRepository, RepositoryError
+from todo_buddy.models import BuddyDocument, Phase, SyncMetadata, Task
+from todo_buddy.repository import JsonRepository, RepositoryError
 
 
-def sample() -> CompanionDocument:
-    return CompanionDocument(
+def sample() -> BuddyDocument:
+    return BuddyDocument(
         schema_version=1,
         title="Sample quest",
         phases=[Phase(id="phase", title="PHASE 1", tasks=[Task(id="task", title="Start")])],

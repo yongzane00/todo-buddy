@@ -2,7 +2,7 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QColor, QPainter, QPen, QPolygon
 from PySide6.QtWidgets import QWidget
 
-from todo_companion.ui.theme import ACCENT, OUTLINE, PAPER
+from todo_buddy.ui.theme import ACCENT, OUTLINE, PAPER
 
 
 class CardWidget(QWidget):

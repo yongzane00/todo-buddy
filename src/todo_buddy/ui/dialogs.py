@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QInputDialog, QMessageBox, QWidget
 
-from todo_companion.models import Phase
+from todo_buddy.models import Phase
 
 
 def prompt_text(parent: QWidget, title: str, label: str, current: str = "") -> str | None:

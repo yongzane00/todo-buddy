@@ -5,13 +5,13 @@ from datetime import UTC, datetime
 from typing import Protocol
 from uuid import uuid4
 
-from todo_companion.models import CompanionDocument, Phase, Task
-from todo_companion.sample_data import create_sample_document
+from todo_buddy.models import BuddyDocument, Phase, Task
+from todo_buddy.sample_data import create_sample_document
 
 
 class Repository(Protocol):
-    def load(self) -> CompanionDocument: ...
-    def save(self, document: CompanionDocument) -> None: ...
+    def load(self) -> BuddyDocument: ...
+    def save(self, document: BuddyDocument) -> None: ...
     def backup(self): ...
 
 
@@ -32,20 +32,20 @@ class TaskService:
         self,
         repository: Repository,
         now: Callable[[], datetime] | None = None,
-        sample_factory: Callable[[], CompanionDocument] = create_sample_document,
+        sample_factory: Callable[[], BuddyDocument] = create_sample_document,
     ):
         self.repository = repository
         self._now = now or (lambda: datetime.now(UTC))
         self._sample_factory = sample_factory
-        self._document: CompanionDocument | None = None
+        self._document: BuddyDocument | None = None
 
     @property
-    def document(self) -> CompanionDocument:
+    def document(self) -> BuddyDocument:
         if self._document is None:
             raise RuntimeError("TaskService must be loaded before use")
         return self._document
 
-    def load_or_initialize(self) -> CompanionDocument:
+    def load_or_initialize(self) -> BuddyDocument:
         self._document = self.repository.load()
         return self._document
 
@@ -59,7 +59,7 @@ class TaskService:
             None,
         )
 
-    def set_task_completion(self, task_id: str, completed: bool) -> CompanionDocument:
+    def set_task_completion(self, task_id: str, completed: bool) -> BuddyDocument:
         candidate = self._copy_document()
         task = next(
             (task for phase in candidate.phases for task in phase.tasks if task.id == task_id),
@@ -70,7 +70,7 @@ class TaskService:
         task.set_completed(completed, now=self._now())
         return self._save(candidate)
 
-    def add_task(self, phase_id: str, title: str) -> CompanionDocument:
+    def add_task(self, phase_id: str, title: str) -> BuddyDocument:
         clean_title = self._clean_title(title)
         candidate = self._copy_document()
         phase = next((phase for phase in candidate.phases if phase.id == phase_id), None)
@@ -79,13 +79,13 @@ class TaskService:
         phase.tasks.append(Task(id=str(uuid4()), title=clean_title))
         return self._save(candidate)
 
-    def add_phase(self, title: str) -> CompanionDocument:
+    def add_phase(self, title: str) -> BuddyDocument:
         clean_title = self._clean_title(title)
         candidate = self._copy_document()
         candidate.phases.append(Phase(id=str(uuid4()), title=clean_title, tasks=[]))
         return self._save(candidate)
 
-    def rename_task(self, task_id: str, title: str) -> CompanionDocument:
+    def rename_task(self, task_id: str, title: str) -> BuddyDocument:
         clean_title = self._clean_title(title)
         candidate = self._copy_document()
         task = next(
@@ -97,7 +97,7 @@ class TaskService:
         task.title = clean_title
         return self._save(candidate)
 
-    def delete_task(self, task_id: str) -> CompanionDocument:
+    def delete_task(self, task_id: str) -> BuddyDocument:
         candidate = self._copy_document()
         for phase in candidate.phases:
             for index, task in enumerate(phase.tasks):
@@ -106,7 +106,7 @@ class TaskService:
                     return self._save(candidate)
         raise ItemNotFoundError(f"Task not found: {task_id}")
 
-    def rename_phase(self, phase_id: str, title: str) -> CompanionDocument:
+    def rename_phase(self, phase_id: str, title: str) -> BuddyDocument:
         clean_title = self._clean_title(title)
         candidate = self._copy_document()
         phase = next((phase for phase in candidate.phases if phase.id == phase_id), None)
@@ -115,7 +115,7 @@ class TaskService:
         phase.title = clean_title
         return self._save(candidate)
 
-    def delete_phase(self, phase_id: str) -> CompanionDocument:
+    def delete_phase(self, phase_id: str) -> BuddyDocument:
         candidate = self._copy_document()
         for index, phase in enumerate(candidate.phases):
             if phase.id == phase_id:
@@ -123,7 +123,7 @@ class TaskService:
                 return self._save(candidate)
         raise ItemNotFoundError(f"Phase not found: {phase_id}")
 
-    def set_all_tasks_completion(self, completed: bool) -> CompanionDocument:
+    def set_all_tasks_completion(self, completed: bool) -> BuddyDocument:
         candidate = self._copy_document()
         now = self._now()
         for phase in candidate.phases:
@@ -131,7 +131,7 @@ class TaskService:
                 task.set_completed(completed, now=now)
         return self._save(candidate)
 
-    def delete_completed_tasks(self) -> CompanionDocument:
+    def delete_completed_tasks(self) -> BuddyDocument:
         candidate = self._copy_document()
         for phase in candidate.phases:
             phase.tasks = [task for task in phase.tasks if not task.completed]
@@ -139,7 +139,7 @@ class TaskService:
 
     def move_task(
         self, task_id: str, destination_phase_id: str, destination_index: int
-    ) -> CompanionDocument:
+    ) -> BuddyDocument:
         candidate = self._copy_document()
         destination = next(
             (phase for phase in candidate.phases if phase.id == destination_phase_id), None
@@ -178,7 +178,7 @@ class TaskService:
         destination.tasks.insert(destination_index, moving_task)
         return self._save(candidate)
 
-    def set_phase_color(self, phase_id: str, color: str | None) -> CompanionDocument:
+    def set_phase_color(self, phase_id: str, color: str | None) -> BuddyDocument:
         candidate = self._copy_document()
         phase = next((phase for phase in candidate.phases if phase.id == phase_id), None)
         if phase is None:
@@ -186,20 +186,20 @@ class TaskService:
         phase.set_color(color)
         return self._save(candidate)
 
-    def rename_document(self, title: str) -> CompanionDocument:
+    def rename_document(self, title: str) -> BuddyDocument:
         candidate = self._copy_document()
         candidate.title = self._clean_title(title)
         return self._save(candidate)
 
-    def reset_sample_data(self) -> CompanionDocument:
+    def reset_sample_data(self) -> BuddyDocument:
         candidate = self._sample_factory()
         self.repository.backup()
         return self._save(candidate)
 
-    def _copy_document(self) -> CompanionDocument:
-        return CompanionDocument.from_dict(self.document.to_dict())
+    def _copy_document(self) -> BuddyDocument:
+        return BuddyDocument.from_dict(self.document.to_dict())
 
-    def _save(self, candidate: CompanionDocument) -> CompanionDocument:
+    def _save(self, candidate: BuddyDocument) -> BuddyDocument:
         self.repository.save(candidate)
         self._document = candidate
         return candidate

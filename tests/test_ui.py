@@ -7,11 +7,11 @@ from PySide6.QtCore import QMimeData, QPoint, QPointF, QRect, Qt
 from PySide6.QtGui import QDropEvent
 from PySide6.QtWidgets import QApplication, QToolButton
 
-from todo_companion.models import CompanionDocument, Phase, SyncMetadata, Task
-from todo_companion.service import TaskService
-from todo_companion.ui.main_window import MainWindow, clamp_position
-from todo_companion.ui.cat_widget import CatState, CatWidget
-from todo_companion.ui.task_list_widget import (
+from todo_buddy.models import BuddyDocument, Phase, SyncMetadata, Task
+from todo_buddy.service import TaskService
+from todo_buddy.ui.main_window import MainWindow, clamp_position
+from todo_buddy.ui.cat_widget import CatState, CatWidget
+from todo_buddy.ui.task_list_widget import (
     TASK_MIME_TYPE,
     QuestCheckBox,
     TaskDropArea,
@@ -21,7 +21,7 @@ from todo_companion.ui.task_list_widget import (
 
 class MemoryRepository:
     def __init__(self):
-        self.document = CompanionDocument(
+        self.document = BuddyDocument(
             schema_version=1,
             title="UI TEST QUEST",
             phases=[Phase(id="phase", title="PHASE 1: TEST", tasks=[Task(id="task", title="Toggle me")])],
@@ -30,11 +30,11 @@ class MemoryRepository:
         self.save_count = 0
 
     def load(self):
-        return CompanionDocument.from_dict(self.document.to_dict())
+        return BuddyDocument.from_dict(self.document.to_dict())
 
     def save(self, document):
         self.save_count += 1
-        self.document = CompanionDocument.from_dict(document.to_dict())
+        self.document = BuddyDocument.from_dict(document.to_dict())
 
     def backup(self):
         return None
@@ -53,7 +53,7 @@ def service():
     return value, repository
 
 
-def test_main_window_uses_companion_window_flags_and_transparency(app):
+def test_main_window_uses_floating_window_flags_and_transparency(app):
     task_service, _ = service()
     window = MainWindow(task_service, restore_position=False)
 
@@ -191,7 +191,7 @@ def test_main_window_has_minimize_control(app):
     button = window.findChild(QToolButton, "minimizeButton")
 
     assert button is not None
-    assert button.accessibleName() == "Minimize Todo Companion"
+    assert button.accessibleName() == "Minimize Todo Buddy"
     window.close()
 
 

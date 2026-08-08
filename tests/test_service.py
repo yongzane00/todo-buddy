@@ -2,8 +2,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from todo_companion.models import CompanionDocument, Phase, SyncMetadata, Task
-from todo_companion.service import ItemNotFoundError, TaskService, TitleError
+from todo_buddy.models import BuddyDocument, Phase, SyncMetadata, Task
+from todo_buddy.service import ItemNotFoundError, TaskService, TitleError
 
 
 class MemoryRepository:
@@ -13,19 +13,19 @@ class MemoryRepository:
         self.backup_count = 0
 
     def load(self):
-        return CompanionDocument.from_dict(self.document.to_dict())
+        return BuddyDocument.from_dict(self.document.to_dict())
 
     def save(self, document):
         self.save_count += 1
-        self.document = CompanionDocument.from_dict(document.to_dict())
+        self.document = BuddyDocument.from_dict(document.to_dict())
 
     def backup(self):
         self.backup_count += 1
         return None
 
 
-def document() -> CompanionDocument:
-    return CompanionDocument(
+def document() -> BuddyDocument:
+    return BuddyDocument(
         schema_version=1,
         title="Make something useful",
         phases=[

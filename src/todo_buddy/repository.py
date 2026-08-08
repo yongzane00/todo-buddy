@@ -8,7 +8,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from todo_companion.models import CompanionDocument, DocumentValidationError
+from todo_buddy.models import BuddyDocument, DocumentValidationError
 
 
 class RepositoryError(RuntimeError):
@@ -16,25 +16,25 @@ class RepositoryError(RuntimeError):
 
 
 class JsonRepository:
-    def __init__(self, path: Path, default_factory: Callable[[], CompanionDocument]):
+    def __init__(self, path: Path, default_factory: Callable[[], BuddyDocument]):
         self.path = Path(path)
         self._default_factory = default_factory
 
-    def load(self) -> CompanionDocument:
+    def load(self) -> BuddyDocument:
         if not self.path.exists():
             return self._default_factory()
         try:
             raw = self.path.read_text(encoding="utf-8")
             value = json.loads(raw)
-            return CompanionDocument.from_dict(value)
+            return BuddyDocument.from_dict(value)
         except (OSError, UnicodeError, json.JSONDecodeError, DocumentValidationError) as error:
             raise RepositoryError(
                 f"Task data at '{self.path}' could not be read. The original file was preserved. {error}"
             ) from error
 
-    def save(self, document: CompanionDocument) -> None:
+    def save(self, document: BuddyDocument) -> None:
         try:
-            validated = CompanionDocument.from_dict(document.to_dict())
+            validated = BuddyDocument.from_dict(document.to_dict())
             encoded = json.dumps(validated.to_dict(), indent=2, ensure_ascii=False) + "\n"
             self.path.parent.mkdir(parents=True, exist_ok=True)
             descriptor, temporary_name = tempfile.mkstemp(
