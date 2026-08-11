@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QSettings, Qt, QUrl, Signal
-from PySide6.QtGui import QColor, QCloseEvent, QDesktopServices, QMouseEvent
+from PySide6.QtCore import QEvent, QPoint, QRect, QSettings, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QCloseEvent, QDesktopServices, QIcon, QMouseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QColorDialog,
@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 
 from todo_buddy.service import TaskService
 from todo_buddy.ui.card_widget import CardWidget, FooterWidget, TriangleTrim
-from todo_buddy.ui.cat_widget import CatWidget
+from todo_buddy.ui.cat_widget import CatWidget, sprite_directory
 from todo_buddy.ui.dialogs import confirm_delete, confirm_reset, prompt_text
 from todo_buddy.ui.task_list_widget import TaskListWidget
 from todo_buddy.ui.theme import INK, MUTED, OUTLINE, application_stylesheet
@@ -36,6 +36,16 @@ CARD_WIDTH = 380
 CARD_HEIGHT = 680
 MINI_WIDTH = 76
 MINI_HEIGHT = 70
+
+
+def application_icon() -> QIcon:
+    """The Kumquat app icon, with a stock-icon fallback if the asset is gone."""
+    path = sprite_directory().parent / "icon" / "todo-buddy.png"
+    if path.is_file():
+        icon = QIcon(str(path))
+        if not icon.isNull():
+            return icon
+    return QApplication.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogInfoView)
 
 
 def clamp_position(
@@ -99,6 +109,10 @@ class DragHeader(QWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        # A stray other-button release mid-drag must not tear the drag down.
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mouseReleaseEvent(event)
+            return
         if self._dragging:
             self.drag_finished.emit()
         self._drag_offset = None
@@ -157,6 +171,10 @@ class MiniCatPage(QWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        # A stray other-button release mid-drag must not tear the drag down.
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mouseReleaseEvent(event)
+            return
         was_dragging = self._dragging
         was_pressed = self._press_position is not None
         self._drag_offset = None
@@ -164,7 +182,7 @@ class MiniCatPage(QWidget):
         self._dragging = False
         if was_dragging:
             self.drag_finished.emit()
-        elif was_pressed and event.button() == Qt.MouseButton.LeftButton:
+        elif was_pressed:
             self.clicked.emit()
         super().mouseReleaseEvent(event)
 
@@ -184,7 +202,10 @@ class MainWindow(QMainWindow):
         self._cat_minimized = False
         self._cat_center_offset: QPoint | None = None
         self._cat_layout_index = -1
+        self._closing = False
+        self._pending_adds: list[tuple[str, str, bool]] = []
         self.setWindowTitle("Todo Buddy")
+        self.setWindowIcon(application_icon())
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -365,12 +386,26 @@ class MainWindow(QMainWindow):
         menu.exec(button.mapToGlobal(button.rect().bottomRight()))
 
     def _add_task_inline(self, phase_id: str, title: str, refocus: bool) -> None:
-        added = self._mutate(
-            lambda: self.service.add_task(phase_id, title), "Could not add quest"
-        )
-        if added and refocus:
-            # Enter commits and reopens the editor for rapid quest entry.
-            self.task_list.start_add_quest(phase_id)
+        # Queue rather than mutate directly so no request can be lost to a
+        # timer that never fires; closeEvent drains this queue synchronously.
+        self._pending_adds.append((phase_id, title, refocus))
+        self._drain_pending_adds()
+
+    def _drain_pending_adds(self) -> None:
+        if not self._closing and QApplication.mouseButtons() != Qt.MouseButton.NoButton:
+            # A click is in flight (the editor blurred on mouse press);
+            # rebuilding the list now would destroy the pressed widget and
+            # swallow its release. Retry once the button is up.
+            QTimer.singleShot(20, self._drain_pending_adds)
+            return
+        while self._pending_adds:
+            phase_id, title, refocus = self._pending_adds.pop(0)
+            added = self._mutate(
+                lambda: self.service.add_task(phase_id, title), "Could not add quest"
+            )
+            if added and refocus and not self._closing:
+                # Enter commits and reopens the editor for rapid quest entry.
+                self.task_list.start_add_quest(phase_id)
 
     def _add_phase(self) -> None:
         title = prompt_text(self, "Add category", "Category name:")
@@ -536,9 +571,7 @@ class MainWindow(QMainWindow):
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
         self.tray_icon = QSystemTrayIcon(self)
-        self.tray_icon.setIcon(
-            QApplication.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogInfoView)
-        )
+        self.tray_icon.setIcon(application_icon())
         self.tray_icon.setToolTip("Todo Buddy")
         tray_menu = QMenu()
         tray_menu.addAction("Show Todo Buddy", self._restore_from_tray)
@@ -567,12 +600,12 @@ class MainWindow(QMainWindow):
     def _restore_from_cat(self) -> None:
         if not self._cat_minimized:
             return
-        target = self._expanded_position()
+        target = self._clamped_expanded_position()
         self._cat_minimized = False
         self._card_layout.insertWidget(self._cat_layout_index, self.cat)
         self.stack.setCurrentWidget(self.card)
         self.setFixedSize(CARD_WIDTH, CARD_HEIGHT)
-        self.move(clamp_position(target, CARD_WIDTH, CARD_HEIGHT, self._screen_geometries()))
+        self.move(target)
         self.raise_()
         self.activateWindow()
 
@@ -582,6 +615,34 @@ class MainWindow(QMainWindow):
             return self.pos()
         mini_center = self.pos() + QPoint(MINI_WIDTH // 2, MINI_HEIGHT // 2)
         return mini_center - self._cat_center_offset
+
+    def _clamped_expanded_position(self) -> QPoint:
+        """Expanded-card position, clamped onto the screen the cat is on.
+
+        The card's raw top-left can land in dead space above or beside the
+        monitors (the cat sits far from the window's corner), and clamping
+        against the screen nearest that point could pick a different monitor
+        than the one the mini cat is visibly on.
+        """
+        screens = self._screen_geometries()
+        if self._cat_minimized and screens:
+            mini_center = self.pos() + QPoint(MINI_WIDTH // 2, MINI_HEIGHT // 2)
+
+            def distance(area: QRect) -> int:
+                x = min(max(mini_center.x(), area.left()), area.right())
+                y = min(max(mini_center.y(), area.top()), area.bottom())
+                return (mini_center.x() - x) ** 2 + (mini_center.y() - y) ** 2
+
+            # An unclamped drag can park the cat's center in the dead zone
+            # between monitors; fall back to the nearest screen to the cat.
+            containing = next(
+                (area for area in screens if area.contains(mini_center)),
+                min(screens, key=distance),
+            )
+            screens = [containing]
+        return clamp_position(
+            self._expanded_position(), CARD_WIDTH, CARD_HEIGHT, screens
+        )
 
     def _screen_geometries(self) -> list[QRect]:
         app = QApplication.instance()
@@ -615,6 +676,13 @@ class MainWindow(QMainWindow):
         self.move(clamp_position(target, self.width(), self.height(), screens))
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        # The deferred commit path never runs once the event loop stops, so
+        # an open editor's text must be committed synchronously before exit.
+        # The closing flag makes the drain bypass its in-flight-click gate,
+        # whose retry timer would otherwise never fire after app.quit().
+        self._closing = True
+        self.task_list.flush_pending_quests()
+        self._drain_pending_adds()
         app = QApplication.instance()
         if app is not None:
             app.removeEventFilter(self)
@@ -623,7 +691,7 @@ class MainWindow(QMainWindow):
         if self._persist_position:
             # While minimized to the cat, save where the full card would sit
             # so the next launch reopens the card, not a stray corner.
-            self.settings.setValue("window/position", self._expanded_position())
+            self.settings.setValue("window/position", self._clamped_expanded_position())
             self.settings.sync()
         super().closeEvent(event)
         # quitOnLastWindowClosed only reacts to visible windows, so closing

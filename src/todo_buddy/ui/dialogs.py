@@ -2,27 +2,10 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QInputDialog, QMessageBox, QWidget
 
-from todo_buddy.models import Phase
-
 
 def prompt_text(parent: QWidget, title: str, label: str, current: str = "") -> str | None:
     value, accepted = QInputDialog.getText(parent, title, label, text=current)
     return value if accepted else None
-
-
-def choose_phase(parent: QWidget, phases: list[Phase]) -> str | None:
-    if not phases:
-        QMessageBox.information(parent, "Add quest", "Add a category before adding a quest.")
-        return None
-    if len(phases) == 1:
-        return phases[0].id
-    labels = [phase.title for phase in phases]
-    selected, accepted = QInputDialog.getItem(
-        parent, "Choose category", "Add the quest to:", labels, editable=False
-    )
-    if not accepted:
-        return None
-    return phases[labels.index(selected)].id
 
 
 def confirm_reset(parent: QWidget) -> bool:

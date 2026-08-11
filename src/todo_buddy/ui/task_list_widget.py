@@ -89,7 +89,10 @@ class _AddQuestEditor(QLineEdit):
 
     def focusOutEvent(self, event) -> None:
         super().focusOutEvent(event)
-        self.focus_lost.emit()
+        # Popups (including this line edit's own context menu) grab focus;
+        # committing then would close the editor under the open menu.
+        if event.reason() != Qt.FocusReason.PopupFocusReason:
+            self.focus_lost.emit()
 
 
 class AddQuestRow(QWidget):
@@ -141,24 +144,30 @@ class AddQuestRow(QWidget):
         if not self._finishing and not self.editor.isHidden():
             self._finish(commit=True, refocus=False)
 
-    def _finish(self, commit: bool, refocus: bool) -> None:
-        if self._finishing:
-            return
-        # Hiding the editor fires focus_lost; the flag stops a double commit.
+    def take_pending_text(self) -> str:
+        """Close the editor and return any uncommitted, non-blank text.
+
+        Hiding the editor fires focus_lost; the flag stops a double commit.
+        """
+        if self._finishing or self.editor.isHidden():
+            return ""
         self._finishing = True
         try:
             title = self.editor.text().strip()
             self.editor.clear()
             self.editor.hide()
             self.button.show()
-            if commit and title:
-                QTimer.singleShot(
-                    0,
-                    lambda phase_id=self.phase_id, value=title, again=refocus:
-                        self.quest_submitted.emit(phase_id, value, again),
-                )
+            return title
         finally:
             self._finishing = False
+
+    def _finish(self, commit: bool, refocus: bool) -> None:
+        # Emit synchronously: this row can be destroyed by the next list
+        # rebuild, so it must never own a pending timer. The listening
+        # TaskListWidget defers the hand-off past this call stack instead.
+        title = self.take_pending_text()
+        if commit and title:
+            self.quest_submitted.emit(self.phase_id, title, refocus)
 
 
 class TaskDropArea(QWidget):
@@ -287,6 +296,9 @@ class TaskDropArea(QWidget):
             item = self._layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                # Detach before deleteLater so findChild never returns a
+                # widget that is merely awaiting deferred deletion.
+                widget.setParent(None)
                 widget.deleteLater()
 
 
@@ -308,6 +320,10 @@ class TaskListWidget(QWidget):
         self._layout.setSpacing(11)
 
     def set_document(self, document: BuddyDocument) -> None:
+        # A rebuild can arrive while an editor still holds typed text (e.g. a
+        # mutation that never blurred it). Harvest it so it is not torn down
+        # with the old rows, and re-submit it once the new rows exist.
+        pending = self._take_pending_quests()
         self._clear()
         if not document.phases:
             empty = QLabel("NO CATEGORIES YET. USE THE MENU TO ADD ONE.")
@@ -333,15 +349,46 @@ class TaskListWidget(QWidget):
             section_layout.addWidget(drop_area)
 
             add_row = AddQuestRow(phase.id, phase.title)
-            add_row.quest_submitted.connect(self.task_add_requested)
+            add_row.quest_submitted.connect(self._relay_quest_submitted)
             section_layout.addWidget(add_row)
             self._layout.addWidget(section)
         self._layout.addStretch(1)
+
+        surviving = {phase.id for phase in document.phases}
+        for phase_id, title in pending:
+            if phase_id in surviving:
+                self._relay_quest_submitted(phase_id, title, False)
+
+    def _relay_quest_submitted(self, phase_id: str, title: str, refocus: bool) -> None:
+        # Defer past the emitting row's call stack: the handler rebuilds the
+        # list, and this widget (unlike the rows) survives rebuilds, so the
+        # timer can never fire on a destroyed emitter.
+        QTimer.singleShot(
+            0,
+            lambda item_id=phase_id, value=title, again=refocus:
+                self.task_add_requested.emit(item_id, value, again),
+        )
 
     def start_add_quest(self, phase_id: str) -> None:
         row = self.findChild(AddQuestRow, f"add-quest-{phase_id}")
         if row is not None:
             row.start_editing()
+
+    def flush_pending_quests(self) -> None:
+        """Synchronously commit open editors' text (used at app shutdown).
+
+        The normal commit path defers its emission through the event loop,
+        which never runs again once the application is quitting.
+        """
+        for phase_id, title in self._take_pending_quests():
+            self.task_add_requested.emit(phase_id, title, False)
+
+    def _take_pending_quests(self) -> list[tuple[str, str]]:
+        return [
+            (row.phase_id, title)
+            for row in self.findChildren(AddQuestRow)
+            if (title := row.take_pending_text())
+        ]
 
     def _phase_heading(self, phase_id: str, title: str, color: str) -> QWidget:
         heading = QWidget()
@@ -454,4 +501,7 @@ class TaskListWidget(QWidget):
             item = self._layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                # Detach before deleteLater so findChild never returns a
+                # widget that is merely awaiting deferred deletion.
+                widget.setParent(None)
                 widget.deleteLater()

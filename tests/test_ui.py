@@ -4,7 +4,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, QRect, QSettings, Qt
-from PySide6.QtGui import QDropEvent, QFocusEvent
+from PySide6.QtGui import QDropEvent, QFocusEvent, QMouseEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QToolButton
 
@@ -329,12 +329,112 @@ def test_main_window_inline_add_persists_and_reopens_editor(app):
         "Toggle me",
         "New quest",
     ]
+    # Flush deferred deletions so a zombie pre-rebuild row cannot satisfy
+    # the assertion below; the open editor must belong to a live row.
+    app.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
     open_editors = [
         candidate
         for candidate in window.task_list.findChildren(AddQuestRow, "add-quest-phase")
         if not candidate.editor.isHidden()
     ]
     assert len(open_editors) == 1  # Enter reopens the editor for the next quest
+    window.close()
+
+
+def test_main_window_inline_add_failure_shows_error_and_does_not_reopen_editor(
+    app, monkeypatch
+):
+    task_service, repository = service()
+    window = MainWindow(task_service, restore_position=False)
+    errors = []
+    monkeypatch.setattr(
+        window, "_show_error", lambda title, error: errors.append((title, error))
+    )
+
+    def failing_save(document):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(repository, "save", failing_save)
+    row = window.task_list.findChild(AddQuestRow, "add-quest-phase")
+
+    row.start_editing()
+    row.editor.setText("Doomed quest")
+    QTest.keyClick(row.editor, Qt.Key.Key_Return)
+    app.processEvents()
+
+    assert len(errors) == 1
+    assert [task.title for task in task_service.document.phases[0].tasks] == ["Toggle me"]
+    app.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+    open_editors = [
+        candidate
+        for candidate in window.task_list.findChildren(AddQuestRow)
+        if not candidate.editor.isHidden()
+    ]
+    assert open_editors == []  # a failed add must not reopen the editor
+    window.close()
+
+
+def test_close_commits_pending_inline_quest(app):
+    task_service, repository = service()
+    window = MainWindow(task_service, restore_position=False)
+    row = window.task_list.findChild(AddQuestRow, "add-quest-phase")
+
+    row.start_editing()
+    row.editor.setText("Last minute quest")
+    window.close()
+
+    assert repository.save_count == 1
+    assert [task.title for task in task_service.document.phases[0].tasks] == [
+        "Toggle me",
+        "Last minute quest",
+    ]
+
+
+def test_dragging_mini_cat_moves_window_without_restoring(app):
+    task_service, _ = service()
+    window = MainWindow(task_service, restore_position=False)
+    window.show()
+    app.processEvents()
+    window._minimize()
+    start = window.pos()
+    page = window.mini_page
+
+    QTest.mousePress(page, Qt.MouseButton.LeftButton, pos=QPoint(10, 10))
+    delta = QApplication.startDragDistance() + 30
+    for step in (delta // 2, delta):
+        local = QPointF(10 + step, 10)
+        move = QMouseEvent(
+            QEvent.Type.MouseMove,
+            local,
+            QPointF(page.mapToGlobal(local.toPoint())),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        QApplication.sendEvent(page, move)
+
+    assert window.cat.state == CatState.ANGRY  # dragging makes her grumpy
+    assert window.pos() != start
+    QTest.mouseRelease(page, Qt.MouseButton.LeftButton, pos=QPoint(10 + delta, 10))
+
+    assert window.stack.currentWidget() is window.mini_page  # a drag never restores
+    assert window.cat.state == CatState.AWAKE
+    window.close()
+
+
+def test_restore_lands_on_the_screen_the_cat_is_on(app, monkeypatch):
+    task_service, _ = service()
+    window = MainWindow(task_service, restore_position=False)
+    window.show()
+    app.processEvents()
+    screens = [QRect(0, 0, 1920, 1080), QRect(1920, 0, 1920, 1080)]
+    monkeypatch.setattr(window, "_screen_geometries", lambda: screens)
+    window._minimize()
+    window.move(QPoint(1930, 0))  # cat parked at the top-left of the RIGHT monitor
+
+    window._restore_from_cat()
+
+    assert screens[1].contains(QRect(window.pos(), window.size()))
     window.close()
 
 
