@@ -15,6 +15,15 @@ be with her, she naps, she stretches when she is awake, she celebrates when you 
   <em>Kumquat</em>
 </p>
 
+## See It In Action
+
+Add a quest right where it belongs, tick it off (she celebrates), shrink the
+whole card down to just Kumquat, and click her to bring it all back:
+
+<p align="center">
+  <img src="docs/todo-buddy-demo.gif" alt="Animated demo: typing a new quest inline, checking it off while the pixel cat celebrates, minimizing the card to just the sleeping cat, and clicking her to restore the card" width="320">
+</p>
+
 ## Requirements
 
 - Windows 10 or 11
