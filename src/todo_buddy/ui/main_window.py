@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QSettings, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QCloseEvent, QDesktopServices, QIcon, QMouseEvent
+from PySide6.QtGui import QCloseEvent, QDesktopServices, QIcon, QMouseEvent
 from PySide6.QtWidgets import (
     QApplication,
-    QColorDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -25,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from todo_buddy.service import TaskService
+from todo_buddy.ui.action_dialog import choose_color
 from todo_buddy.ui.card_widget import CardWidget, FooterWidget, TriangleTrim
 from todo_buddy.ui.cat_widget import CatWidget, sprite_directory
 from todo_buddy.ui.dialogs import confirm_delete, confirm_reset, prompt_text
@@ -203,7 +203,10 @@ class MainWindow(QMainWindow):
         self._cat_center_offset: QPoint | None = None
         self._cat_layout_index = -1
         self._closing = False
-        self._pending_adds: list[tuple[str, str, bool]] = []
+        # Zero-arg callables queued from inline edits (add/rename); draining
+        # is gated on no mouse button being held, so a rebuild never
+        # destroys a widget mid-click. See _drain_pending_mutations.
+        self._pending_mutations: list[Callable[[], None]] = []
         self.setWindowTitle("Todo Buddy")
         self.setWindowIcon(application_icon())
         self.setWindowFlags(
@@ -310,16 +313,17 @@ class MainWindow(QMainWindow):
         self.task_list = TaskListWidget()
         self.task_list.task_toggled.connect(self._set_task_completion)
         self.task_list.task_add_requested.connect(self._add_task_inline)
-        self.task_list.task_edit_requested.connect(self._edit_task)
+        self.task_list.task_rename_requested.connect(self._rename_task_inline)
         self.task_list.task_delete_requested.connect(self._delete_task)
         self.task_list.task_move_requested.connect(self._move_task)
-        self.task_list.phase_edit_requested.connect(self._edit_phase)
+        self.task_list.phase_rename_requested.connect(self._rename_phase_inline)
         self.task_list.phase_color_requested.connect(self._change_phase_color)
         self.task_list.phase_delete_requested.connect(self._delete_phase)
         scroll.setWidget(self.task_list)
         root.addWidget(scroll, 1)
 
         self.cat = CatWidget()
+        self.cat.clicked.connect(self._minimize)
         root.addWidget(self.cat)
         root.addWidget(TriangleTrim())
         footer = FooterWidget()
@@ -388,18 +392,7 @@ class MainWindow(QMainWindow):
     def _add_task_inline(self, phase_id: str, title: str, refocus: bool) -> None:
         # Queue rather than mutate directly so no request can be lost to a
         # timer that never fires; closeEvent drains this queue synchronously.
-        self._pending_adds.append((phase_id, title, refocus))
-        self._drain_pending_adds()
-
-    def _drain_pending_adds(self) -> None:
-        if not self._closing and QApplication.mouseButtons() != Qt.MouseButton.NoButton:
-            # A click is in flight (the editor blurred on mouse press);
-            # rebuilding the list now would destroy the pressed widget and
-            # swallow its release. Retry once the button is up.
-            QTimer.singleShot(20, self._drain_pending_adds)
-            return
-        while self._pending_adds:
-            phase_id, title, refocus = self._pending_adds.pop(0)
+        def perform() -> None:
             added = self._mutate(
                 lambda: self.service.add_task(phase_id, title), "Could not add quest"
             )
@@ -407,23 +400,39 @@ class MainWindow(QMainWindow):
                 # Enter commits and reopens the editor for rapid quest entry.
                 self.task_list.start_add_quest(phase_id)
 
+        self._pending_mutations.append(perform)
+        self._drain_pending_mutations()
+
+    def _rename_task_inline(self, task_id: str, title: str) -> None:
+        self._pending_mutations.append(
+            lambda: self._mutate(
+                lambda: self.service.rename_task(task_id, title), "Could not edit quest"
+            )
+        )
+        self._drain_pending_mutations()
+
+    def _rename_phase_inline(self, phase_id: str, title: str) -> None:
+        self._pending_mutations.append(
+            lambda: self._mutate(
+                lambda: self.service.rename_phase(phase_id, title), "Could not edit category"
+            )
+        )
+        self._drain_pending_mutations()
+
+    def _drain_pending_mutations(self) -> None:
+        if not self._closing and QApplication.mouseButtons() != Qt.MouseButton.NoButton:
+            # A click is in flight (an editor blurred on mouse press);
+            # rebuilding the list now would destroy the pressed widget and
+            # swallow its release. Retry once the button is up.
+            QTimer.singleShot(20, self._drain_pending_mutations)
+            return
+        while self._pending_mutations:
+            self._pending_mutations.pop(0)()
+
     def _add_phase(self) -> None:
         title = prompt_text(self, "Add category", "Category name:")
         if title is not None:
             self._mutate(lambda: self.service.add_phase(title), "Could not add category")
-
-    def _edit_task(self, task_id: str) -> None:
-        task = next(
-            (task for phase in self.service.document.phases for task in phase.tasks if task.id == task_id),
-            None,
-        )
-        if task is None:
-            return
-        title = prompt_text(self, "Edit quest", "Quest title:", task.title)
-        if title is not None:
-            self._mutate(
-                lambda: self.service.rename_task(task_id, title), "Could not edit quest"
-            )
 
     def _delete_task(self, task_id: str) -> None:
         task = next(
@@ -436,30 +445,16 @@ class MainWindow(QMainWindow):
             return
         self._mutate(lambda: self.service.delete_task(task_id), "Could not delete quest")
 
-    def _edit_phase(self, phase_id: str) -> None:
-        phase = next(
-            (phase for phase in self.service.document.phases if phase.id == phase_id), None
-        )
-        if phase is None:
-            return
-        title = prompt_text(self, "Edit category", "Category name:", phase.title)
-        if title is not None:
-            self._mutate(
-                lambda: self.service.rename_phase(phase_id, title), "Could not edit category"
-            )
-
     def _change_phase_color(self, phase_id: str) -> None:
         phase = next(
             (phase for phase in self.service.document.phases if phase.id == phase_id), None
         )
         if phase is None:
             return
-        color = QColorDialog.getColor(
-            QColor(phase.color or "#D4A54E"), self, "Choose category color"
-        )
-        if color.isValid():
+        color = choose_color(self, "Choose category color", phase.color or "#D4A54E")
+        if color is not None:
             self._mutate(
-                lambda: self.service.set_phase_color(phase_id, color.name()),
+                lambda: self.service.set_phase_color(phase_id, color),
                 "Could not change category color",
             )
 
@@ -682,7 +677,8 @@ class MainWindow(QMainWindow):
         # whose retry timer would otherwise never fire after app.quit().
         self._closing = True
         self.task_list.flush_pending_quests()
-        self._drain_pending_adds()
+        self.task_list.flush_active_edit()
+        self._drain_pending_mutations()
         app = QApplication.instance()
         if app is not None:
             app.removeEventFilter(self)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QInputDialog, QMessageBox, QWidget
+from PySide6.QtWidgets import QInputDialog, QWidget
+
+from todo_buddy.ui.action_dialog import confirm_action
 
 
 def prompt_text(parent: QWidget, title: str, label: str, current: str = "") -> str | None:
@@ -9,22 +11,13 @@ def prompt_text(parent: QWidget, title: str, label: str, current: str = "") -> s
 
 
 def confirm_reset(parent: QWidget) -> bool:
-    result = QMessageBox.question(
+    return confirm_action(
         parent,
         "Reset sample data?",
         "Replace all current quests with a fresh sample? A timestamped backup will be kept.",
-        QMessageBox.StandardButton.Reset | QMessageBox.StandardButton.Cancel,
-        QMessageBox.StandardButton.Cancel,
+        confirm_text="Reset",
     )
-    return result == QMessageBox.StandardButton.Reset
 
 
 def confirm_delete(parent: QWidget, title: str, message: str) -> bool:
-    result = QMessageBox.question(
-        parent,
-        title,
-        message,
-        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-        QMessageBox.StandardButton.Cancel,
-    )
-    return result == QMessageBox.StandardButton.Yes
+    return confirm_action(parent, title, message, confirm_text="Delete")

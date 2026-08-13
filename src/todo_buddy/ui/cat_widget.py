@@ -4,9 +4,9 @@ import sys
 from enum import Enum
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
-from PySide6.QtWidgets import QWidget
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
+from PySide6.QtWidgets import QApplication, QWidget
 
 from todo_buddy.ui.theme import INK
 
@@ -60,12 +60,15 @@ def load_sprite_sheets() -> dict[CatState, QPixmap]:
 class CatWidget(QWidget):
     """A small procedural cat with interaction-driven animation states."""
 
+    clicked = Signal()
+
     def __init__(self, parent=None, inactivity_ms: int = 20_000):
         super().__init__(parent)
         self.setFixedHeight(SPRITE_FRAME)
-        self.setAccessibleName("Orange companion cat")
-        self.setToolTip("The companion cat reacts to your quests")
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAccessibleName("Orange companion cat, click to minimize")
+        self.setToolTip("Click to minimize Todo Buddy")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._press_position: QPoint | None = None
         self._sheets = load_sprite_sheets()
         self._state = CatState.AWAKE
         self._frame = 0
@@ -88,6 +91,24 @@ class CatWidget(QWidget):
     @property
     def state(self) -> CatState:
         return self._state
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press_position = event.position().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        # A stray other-button release while the left button is held must
+        # not swallow the pending click (matches DragHeader/MiniCatPage).
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mouseReleaseEvent(event)
+            return
+        if self._press_position is not None:
+            moved = (event.position().toPoint() - self._press_position).manhattanLength()
+            if moved < QApplication.startDragDistance():
+                self.clicked.emit()
+        self._press_position = None
+        super().mouseReleaseEvent(event)
 
     def note_activity(self) -> None:
         if self._state == CatState.SLEEPING:

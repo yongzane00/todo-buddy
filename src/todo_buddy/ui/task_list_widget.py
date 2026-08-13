@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QToolButton,
@@ -35,6 +36,10 @@ class QuestCheckBox(QCheckBox):
 
 
 class TaskRow(QWidget):
+    """A single quest row: drag-to-reorder, double-click-to-rename."""
+
+    edit_requested = Signal()
+
     def __init__(self, task_id: str, parent=None):
         super().__init__(parent)
         self.task_id = task_id
@@ -42,7 +47,6 @@ class TaskRow(QWidget):
         self.setObjectName("taskRow")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
-        self.setToolTip("Drag to reorder or move to another category")
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -75,8 +79,35 @@ class TaskRow(QWidget):
         self._press_position = None
         super().mouseReleaseEvent(event)
 
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.edit_requested.emit()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
-class _AddQuestEditor(QLineEdit):
+
+class _HeadingWidget(QWidget):
+    """A category heading: double-click anywhere on it to rename."""
+
+    edit_requested = Signal()
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.edit_requested.emit()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+
+class _InlineLineEdit(QLineEdit):
+    """A single-line editor shared by every inline text edit in the card.
+
+    Escape cancels; a blur commits — except when the "blur" is really just
+    this line edit's own popup (its right-click context menu, say) grabbing
+    focus, which must not close the editor out from under the popup.
+    """
+
     escape_pressed = Signal()
     focus_lost = Signal()
 
@@ -89,10 +120,65 @@ class _AddQuestEditor(QLineEdit):
 
     def focusOutEvent(self, event) -> None:
         super().focusOutEvent(event)
-        # Popups (including this line edit's own context menu) grab focus;
-        # committing then would close the editor under the open menu.
         if event.reason() != Qt.FocusReason.PopupFocusReason:
             self.focus_lost.emit()
+
+
+class InlineRenameController:
+    """Wires a QLabel + hidden line editor for double-click-to-rename.
+
+    Mirrors AddQuestRow's commit/cancel/blur handling so every inline text
+    edit in the app — adding a quest, renaming a quest, renaming a category —
+    shares one hardened implementation instead of three subtly different
+    ones. `on_commit` must be safe to call synchronously: the caller is
+    expected to hand off through something that outlives a list rebuild
+    (see TaskListWidget._relay_task_rename/_relay_phase_rename), the same way
+    AddQuestRow hands its commit off rather than mutating directly.
+    """
+
+    def __init__(
+        self,
+        label: QLabel,
+        editor: _InlineLineEdit,
+        current_text: str,
+        on_commit: Callable[[str], None],
+        on_text_changed: Callable[[str], None] | None = None,
+        on_editing_ended: Callable[[], None] | None = None,
+    ):
+        self._label = label
+        self._editor = editor
+        self._current_text = current_text
+        self._on_commit = on_commit
+        self._on_editing_ended = on_editing_ended
+        self._finishing = False
+        editor.returnPressed.connect(lambda: self._finish(commit=True))
+        editor.escape_pressed.connect(lambda: self._finish(commit=False))
+        editor.focus_lost.connect(lambda: self._finish(commit=True))
+        if on_text_changed:
+            editor.textChanged.connect(on_text_changed)
+
+    def start_editing(self, initial_text: str | None = None) -> None:
+        self._label.hide()
+        self._editor.setText(initial_text if initial_text is not None else self._current_text)
+        self._editor.show()
+        self._editor.setFocus(Qt.FocusReason.OtherFocusReason)
+        self._editor.selectAll()
+
+    def _finish(self, commit: bool) -> None:
+        if self._finishing:
+            return
+        # Hiding the editor fires focus_lost; the flag stops a double commit.
+        self._finishing = True
+        try:
+            text = self._editor.text().strip()
+            self._editor.hide()
+            self._label.show()
+            if self._on_editing_ended:
+                self._on_editing_ended()
+            if commit and text and text != self._current_text:
+                self._on_commit(text)
+        finally:
+            self._finishing = False
 
 
 class AddQuestRow(QWidget):
@@ -124,7 +210,7 @@ class AddQuestRow(QWidget):
         self.button.clicked.connect(self.start_editing)
         layout.addWidget(self.button)
 
-        self.editor = _AddQuestEditor()
+        self.editor = _InlineLineEdit()
         self.editor.setObjectName("addQuestEditor")
         self.editor.setPlaceholderText("New quest, then Enter")
         self.editor.setAccessibleName(f"New quest title for {phase_title}")
@@ -305,10 +391,10 @@ class TaskDropArea(QWidget):
 class TaskListWidget(QWidget):
     task_toggled = Signal(str, bool)
     task_add_requested = Signal(str, str, bool)  # phase_id, title, refocus
-    task_edit_requested = Signal(str)
+    task_rename_requested = Signal(str, str)  # task_id, title
     task_delete_requested = Signal(str)
     task_move_requested = Signal(str, str, int)
-    phase_edit_requested = Signal(str)
+    phase_rename_requested = Signal(str, str)  # phase_id, title
     phase_color_requested = Signal(str)
     phase_delete_requested = Signal(str)
 
@@ -318,18 +404,31 @@ class TaskListWidget(QWidget):
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(1, 0, 3, 8)
         self._layout.setSpacing(11)
+        # (kind, item_id, original_text, pending_text) for the one inline
+        # rename in progress, if any. Tracked here (not just on the row)
+        # so an unrelated rebuild can reopen the edit instead of losing it.
+        self._active_edit: tuple[str, str, str, str] | None = None
 
     def set_document(self, document: BuddyDocument) -> None:
         # A rebuild can arrive while an editor still holds typed text (e.g. a
-        # mutation that never blurred it). Harvest it so it is not torn down
-        # with the old rows, and re-submit it once the new rows exist.
+        # mutation that never blurred it). Harvest new-quest drafts so they
+        # are not torn down with the old rows, and preserve any in-progress
+        # rename so it reopens on the rebuilt row instead of vanishing
+        # mid-keystroke.
         pending = self._take_pending_quests()
+        preserved_edit = self._active_edit
+        self._active_edit = None
         self._clear()
         if not document.phases:
             empty = QLabel("NO CATEGORIES YET. USE THE MENU TO ADD ONE.")
             empty.setWordWrap(True)
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._layout.addWidget(empty)
+
+        def reopen_text(kind: str, item_id: str) -> str | None:
+            if preserved_edit and preserved_edit[0] == kind and preserved_edit[1] == item_id:
+                return preserved_edit[3]
+            return None
 
         for phase in document.phases:
             color = phase.color or ACCENT
@@ -338,12 +437,18 @@ class TaskListWidget(QWidget):
             section_layout = QVBoxLayout(section)
             section_layout.setContentsMargins(0, 0, 0, 0)
             section_layout.setSpacing(3)
-            section_layout.addWidget(self._phase_heading(phase.id, phase.title, color))
+            section_layout.addWidget(
+                self._phase_heading(
+                    phase.id, phase.title, color, reopen_text=reopen_text("phase", phase.id)
+                )
+            )
 
             drop_area = TaskDropArea(phase.id)
             drop_area.set_tasks(
                 phase.tasks,
-                lambda task, category_color=color: self._task_row(task, category_color),
+                lambda task, category_color=color: self._task_row(
+                    task, category_color, reopen_text=reopen_text("task", task.id)
+                ),
             )
             drop_area.task_dropped.connect(self.task_move_requested)
             section_layout.addWidget(drop_area)
@@ -369,6 +474,26 @@ class TaskListWidget(QWidget):
                 self.task_add_requested.emit(item_id, value, again),
         )
 
+    def _relay_task_rename(self, task_id: str, title: str) -> None:
+        QTimer.singleShot(
+            0, lambda item_id=task_id, value=title: self.task_rename_requested.emit(item_id, value)
+        )
+
+    def _relay_phase_rename(self, phase_id: str, title: str) -> None:
+        QTimer.singleShot(
+            0,
+            lambda item_id=phase_id, value=title: self.phase_rename_requested.emit(item_id, value),
+        )
+
+    def _update_edit_text(self, kind: str, item_id: str, text: str) -> None:
+        if self._active_edit and self._active_edit[:2] == (kind, item_id):
+            _, _, original, _ = self._active_edit
+            self._active_edit = (kind, item_id, original, text)
+
+    def _end_edit(self, kind: str, item_id: str) -> None:
+        if self._active_edit and self._active_edit[:2] == (kind, item_id):
+            self._active_edit = None
+
     def start_add_quest(self, phase_id: str) -> None:
         row = self.findChild(AddQuestRow, f"add-quest-{phase_id}")
         if row is not None:
@@ -383,6 +508,25 @@ class TaskListWidget(QWidget):
         for phase_id, title in self._take_pending_quests():
             self.task_add_requested.emit(phase_id, title, False)
 
+    def flush_active_edit(self) -> None:
+        """Synchronously commit an in-progress rename (used at app shutdown).
+
+        Same reasoning as flush_pending_quests: the deferred relay never
+        gets a chance to fire once the event loop stops.
+        """
+        edit = self._active_edit
+        if edit is None:
+            return
+        self._active_edit = None
+        kind, item_id, original, pending = edit
+        text = pending.strip()
+        if not text or text == original:
+            return
+        if kind == "task":
+            self.task_rename_requested.emit(item_id, text)
+        else:
+            self.phase_rename_requested.emit(item_id, text)
+
     def _take_pending_quests(self) -> list[tuple[str, str]]:
         return [
             (row.phase_id, title)
@@ -390,31 +534,68 @@ class TaskListWidget(QWidget):
             if (title := row.take_pending_text())
         ]
 
-    def _phase_heading(self, phase_id: str, title: str, color: str) -> QWidget:
-        heading = QWidget()
+    def _phase_heading(
+        self, phase_id: str, title: str, color: str, reopen_text: str | None = None
+    ) -> QWidget:
+        heading = _HeadingWidget()
         heading.setObjectName("categoryHeading")
         heading.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         layout = QHBoxLayout(heading)
         layout.setContentsMargins(3, 1, 2, 1)
         layout.setSpacing(7)
 
-        color_chip = QLabel()
-        color_chip.setFixedSize(7, 24)
-        color_chip.setStyleSheet(f"background: {color}; border-radius: 3px;")
+        color_chip = QPushButton()
+        color_chip.setObjectName(f"phase-color-{phase_id}")
+        color_chip.setFlat(True)
+        color_chip.setFixedSize(12, 24)
+        color_chip.setCursor(Qt.CursorShape.PointingHandCursor)
+        color_chip.setToolTip("Click to change the category color")
+        color_chip.setAccessibleName(f"Change color for category {title}")
+        color_chip.setStyleSheet(
+            f"QPushButton {{ background: {color}; border-radius: 3px; border: none; }}"
+        )
+        color_chip.clicked.connect(
+            lambda checked=False, item_id=phase_id: self.phase_color_requested.emit(item_id)
+        )
         layout.addWidget(color_chip)
 
         label = QLabel(title)
         label.setObjectName("phaseTitle")
         label.setWordWrap(True)
+        label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         layout.addWidget(label, 1)
 
+        editor = _InlineLineEdit()
+        editor.setObjectName("phaseTitleEditor")
+        editor.setAccessibleName(f"New name for category {title}")
+        editor.hide()
+        layout.addWidget(editor, 1)
+
+        controller = InlineRenameController(
+            label,
+            editor,
+            current_text=title,
+            on_commit=lambda text, item_id=phase_id: self._relay_phase_rename(item_id, text),
+            on_text_changed=lambda text, item_id=phase_id:
+                self._update_edit_text("phase", item_id, text),
+            on_editing_ended=lambda item_id=phase_id: self._end_edit("phase", item_id),
+        )
+
+        def begin_edit(item_id=phase_id, initial=title):
+            if self._active_edit and self._active_edit[:2] == ("phase", item_id):
+                # Already editing this exact category: a second double-click
+                # (e.g. a stray click on the still-visible heading) must not
+                # reset whatever the user has typed so far back to the title.
+                return
+            self._active_edit = ("phase", item_id, initial, initial)
+            controller.start_editing(initial)
+
+        heading.edit_requested.connect(begin_edit)
+        if reopen_text is not None:
+            self._active_edit = ("phase", phase_id, title, reopen_text)
+            controller.start_editing(reopen_text)
+
         menu = QMenu(heading)
-        menu.addAction("Edit category...").triggered.connect(
-            lambda checked=False, item_id=phase_id: self.phase_edit_requested.emit(item_id)
-        )
-        menu.addAction("Change color...").triggered.connect(
-            lambda checked=False, item_id=phase_id: self.phase_color_requested.emit(item_id)
-        )
         menu.addAction("Delete category...").triggered.connect(
             lambda checked=False, item_id=phase_id: self.phase_delete_requested.emit(item_id)
         )
@@ -429,7 +610,7 @@ class TaskListWidget(QWidget):
         layout.addWidget(button)
         return heading
 
-    def _task_row(self, task: Task, color: str) -> TaskRow:
+    def _task_row(self, task: Task, color: str, reopen_text: str | None = None) -> TaskRow:
         row = TaskRow(task.id)
         layout = QHBoxLayout(row)
         layout.setContentsMargins(8, 7, 5, 7)
@@ -437,7 +618,6 @@ class TaskListWidget(QWidget):
         layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         drag_handle = QLabel("::")
-        drag_handle.setToolTip("Drag to reorder")
         drag_handle.setStyleSheet(f"color: {color}; font-weight: 700;")
         drag_handle.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         layout.addWidget(drag_handle)
@@ -472,10 +652,37 @@ class TaskListWidget(QWidget):
         label.setFont(font)
         label.setStyleSheet(f"color: {COMPLETED if task.completed else INK};")
 
-        menu = QMenu(row)
-        menu.addAction("Edit quest...").triggered.connect(
-            lambda checked=False, task_id=task.id: self.task_edit_requested.emit(task_id)
+        editor = _InlineLineEdit()
+        editor.setObjectName("taskTitleEditor")
+        editor.setAccessibleName(f"New title for quest {task.title}")
+        editor.hide()
+
+        controller = InlineRenameController(
+            label,
+            editor,
+            current_text=task.title,
+            on_commit=lambda text, task_id=task.id: self._relay_task_rename(task_id, text),
+            on_text_changed=lambda text, task_id=task.id:
+                self._update_edit_text("task", task_id, text),
+            on_editing_ended=lambda task_id=task.id: self._end_edit("task", task_id),
         )
+
+        def begin_edit(task_id=task.id, initial=task.title):
+            if self._active_edit and self._active_edit[:2] == ("task", task_id):
+                # Already editing this exact quest: a second double-click
+                # (e.g. a stray click on the still-visible drag handle) must
+                # not reset whatever the user has typed so far back to the
+                # title.
+                return
+            self._active_edit = ("task", task_id, initial, initial)
+            controller.start_editing(initial)
+
+        row.edit_requested.connect(begin_edit)
+        if reopen_text is not None:
+            self._active_edit = ("task", task.id, task.title, reopen_text)
+            controller.start_editing(reopen_text)
+
+        menu = QMenu(row)
         menu.addAction("Delete quest...").triggered.connect(
             lambda checked=False, task_id=task.id: self.task_delete_requested.emit(task_id)
         )
@@ -493,6 +700,7 @@ class TaskListWidget(QWidget):
         )
         layout.addWidget(checkbox)
         layout.addWidget(label, 1)
+        layout.addWidget(editor, 1)
         layout.addWidget(button)
         return row
 

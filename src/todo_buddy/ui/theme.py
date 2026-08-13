@@ -5,6 +5,7 @@ ACCENT = "#D4A54E"
 COMPLETED = "#66764F"
 MUTED = "#756A68"
 RULE = "#B7AA92"
+DANGER = "#A83F32"
 
 TYPEWRITER_FONT = '"Courier New"'
 BODY_FONT = '"Segoe UI"'
@@ -69,7 +70,7 @@ def application_stylesheet() -> str:
             background: rgba(255, 253, 248, 235);
             color: {INK};
         }}
-        QLineEdit#addQuestEditor {{
+        QLineEdit#addQuestEditor, QLineEdit#taskTitleEditor, QLineEdit#phaseTitleEditor {{
             background: rgba(255, 253, 248, 235);
             border: 1px solid {ACCENT};
             border-radius: 7px;

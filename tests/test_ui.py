@@ -6,10 +6,13 @@ import pytest
 from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, QRect, QSettings, Qt
 from PySide6.QtGui import QDropEvent, QFocusEvent, QMouseEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QToolButton
+from PySide6.QtWidgets import QApplication, QDialog, QLineEdit, QPushButton, QToolButton, QWidget
 
 from todo_buddy.models import BuddyDocument, Phase, SyncMetadata, Task
 from todo_buddy.service import TaskService
+from todo_buddy.ui import action_dialog, dialogs
+from todo_buddy.ui import main_window as main_window_module
+from todo_buddy.ui.action_dialog import ColorSwatchPicker, choose_color
 from todo_buddy.ui.main_window import (
     CARD_HEIGHT,
     CARD_WIDTH,
@@ -25,6 +28,7 @@ from todo_buddy.ui.task_list_widget import (
     QuestCheckBox,
     TaskDropArea,
     TaskListWidget,
+    TaskRow,
 )
 
 
@@ -87,32 +91,106 @@ def test_task_list_emits_task_id_and_new_state(app):
     assert checkbox.isChecked()
 
 
-def test_task_and_phase_action_menus_emit_item_ids(app):
+def test_task_and_phase_menus_are_delete_only(app):
+    # Edit moved to double-click and color moved to the chip, so the "..."
+    # dropdown for each line item is left with just its delete action.
     task_service, _ = service()
     widget = TaskListWidget()
     widget.set_document(task_service.document)
     requested = []
-    widget.task_edit_requested.connect(lambda item_id: requested.append(("edit-task", item_id)))
     widget.task_delete_requested.connect(lambda item_id: requested.append(("delete-task", item_id)))
-    widget.phase_edit_requested.connect(lambda item_id: requested.append(("edit-phase", item_id)))
     widget.phase_delete_requested.connect(lambda item_id: requested.append(("delete-phase", item_id)))
-    widget.phase_color_requested.connect(lambda item_id: requested.append(("color-phase", item_id)))
 
     task_menu = widget.findChild(QToolButton, "task-actions-task").menu()
     phase_menu = widget.findChild(QToolButton, "phase-actions-phase").menu()
-    task_menu.actions()[0].trigger()
-    task_menu.actions()[1].trigger()
-    phase_menu.actions()[0].trigger()
-    phase_menu.actions()[1].trigger()
-    phase_menu.actions()[2].trigger()
 
-    assert requested == [
-        ("edit-task", "task"),
-        ("delete-task", "task"),
-        ("edit-phase", "phase"),
-        ("color-phase", "phase"),
-        ("delete-phase", "phase"),
-    ]
+    assert [action.text() for action in task_menu.actions()] == ["Delete quest..."]
+    assert [action.text() for action in phase_menu.actions()] == ["Delete category..."]
+
+    task_menu.actions()[0].trigger()
+    phase_menu.actions()[0].trigger()
+
+    assert requested == [("delete-task", "task"), ("delete-phase", "phase")]
+
+
+def test_color_chip_click_emits_phase_color_requested(app):
+    task_service, _ = service()
+    widget = TaskListWidget()
+    widget.set_document(task_service.document)
+    requested = []
+    widget.phase_color_requested.connect(requested.append)
+
+    widget.findChild(QPushButton, "phase-color-phase").click()
+
+    assert requested == ["phase"]
+
+
+def test_task_row_has_no_drag_hint_tooltip(app):
+    # The dark "Drag to reorder..." hover box was intentionally removed.
+    task_service, _ = service()
+    widget = TaskListWidget()
+    widget.set_document(task_service.document)
+
+    assert widget.findChild(TaskRow, "taskRow").toolTip() == ""
+
+
+def test_double_click_task_row_opens_inline_editor_and_renames(app):
+    task_service, _ = service()
+    widget = TaskListWidget()
+    widget.set_document(task_service.document)
+    renamed = []
+    widget.task_rename_requested.connect(lambda task_id, title: renamed.append((task_id, title)))
+    row = widget.findChild(TaskRow, "taskRow")
+    editor = row.findChild(QLineEdit, "taskTitleEditor")
+    assert editor.isHidden()  # sanity: editor starts hidden
+
+    QTest.mouseDClick(row, Qt.MouseButton.LeftButton)
+
+    assert not editor.isHidden()
+    assert editor.text() == "Toggle me"  # pre-filled and pre-selected
+
+    QTest.keyClicks(editor, "Renamed quest")
+    QTest.keyClick(editor, Qt.Key.Key_Return)
+    app.processEvents()  # the rename relay defers emission by one event-loop turn
+
+    assert renamed == [("task", "Renamed quest")]
+    assert editor.isHidden()
+
+
+def test_double_click_task_row_escape_cancels_without_emitting(app):
+    task_service, _ = service()
+    widget = TaskListWidget()
+    widget.set_document(task_service.document)
+    renamed = []
+    widget.task_rename_requested.connect(lambda task_id, title: renamed.append((task_id, title)))
+    row = widget.findChild(TaskRow, "taskRow")
+
+    QTest.mouseDClick(row, Qt.MouseButton.LeftButton)
+    editor = row.findChild(QLineEdit, "taskTitleEditor")
+    QTest.keyClicks(editor, "Ignored edit")
+    QTest.keyClick(editor, Qt.Key.Key_Escape)
+
+    assert renamed == []
+    assert editor.isHidden()
+
+
+def test_double_click_phase_heading_renames_inline(app):
+    task_service, _ = service()
+    widget = TaskListWidget()
+    widget.set_document(task_service.document)
+    renamed = []
+    widget.phase_rename_requested.connect(lambda phase_id, title: renamed.append((phase_id, title)))
+    heading = widget.findChild(QWidget, "categoryHeading")
+
+    QTest.mouseDClick(heading, Qt.MouseButton.LeftButton)
+    editor = heading.findChild(QLineEdit, "phaseTitleEditor")
+    assert editor.text() == "PHASE 1: TEST"
+
+    QTest.keyClicks(editor, "Renamed category")
+    QTest.keyClick(editor, Qt.Key.Key_Return)
+    app.processEvents()  # the rename relay defers emission by one event-loop turn
+
+    assert renamed == [("phase", "Renamed category")]
 
 
 def test_drop_area_calculates_post_removal_insertion_indexes(app):
@@ -436,6 +514,159 @@ def test_restore_lands_on_the_screen_the_cat_is_on(app, monkeypatch):
 
     assert screens[1].contains(QRect(window.pos(), window.size()))
     window.close()
+
+
+def test_clicking_cat_minimizes_the_card(app):
+    task_service, _ = service()
+    window = MainWindow(task_service, restore_position=False)
+    window.show()
+    app.processEvents()
+
+    QTest.mouseClick(window.cat, Qt.MouseButton.LeftButton)
+
+    assert window.stack.currentWidget() is window.mini_page
+    window.close()
+
+
+def test_unrelated_mutation_preserves_in_progress_rename(app):
+    # A rebuild triggered by something else entirely (here: marking every
+    # quest complete) must not discard whatever the user is mid-typing into
+    # an unrelated quest's rename editor.
+    repository = MemoryRepository()
+    repository.document = BuddyDocument(
+        schema_version=1,
+        title="TEST",
+        phases=[
+            Phase(
+                id="phase",
+                title="PHASE",
+                tasks=[Task(id="task-a", title="Task A"), Task(id="task-b", title="Task B")],
+            )
+        ],
+        sync=SyncMetadata(),
+    )
+    task_service = TaskService(repository)
+    task_service.load_or_initialize()
+    window = MainWindow(task_service, restore_position=False)
+    row_a = next(r for r in window.task_list.findChildren(TaskRow) if r.task_id == "task-a")
+
+    QTest.mouseDClick(row_a, Qt.MouseButton.LeftButton)
+    editor_a = row_a.findChild(QLineEdit, "taskTitleEditor")
+    QTest.keyClicks(editor_a, "Task A in progress")
+
+    window._mark_all_complete()  # unrelated mutation elsewhere rebuilds the list
+
+    new_row_a = next(r for r in window.task_list.findChildren(TaskRow) if r.task_id == "task-a")
+    new_editor_a = new_row_a.findChild(QLineEdit, "taskTitleEditor")
+    assert not new_editor_a.isHidden()
+    assert new_editor_a.text() == "Task A in progress"
+    window.close()
+
+
+def test_close_commits_pending_inline_rename(app):
+    task_service, repository = service()
+    window = MainWindow(task_service, restore_position=False)
+    row = window.task_list.findChild(TaskRow, "taskRow")
+
+    QTest.mouseDClick(row, Qt.MouseButton.LeftButton)
+    editor = row.findChild(QLineEdit, "taskTitleEditor")
+    QTest.keyClicks(editor, "Renamed before close")
+    window.close()
+
+    assert [task.title for task in task_service.document.phases[0].tasks] == [
+        "Renamed before close"
+    ]
+
+
+def test_change_phase_color_applies_chosen_color(app, monkeypatch):
+    task_service, _ = service()
+    window = MainWindow(task_service, restore_position=False)
+    monkeypatch.setattr(
+        main_window_module, "choose_color", lambda parent, title, current: "#123456"
+    )
+
+    window._change_phase_color("phase")
+
+    assert task_service.document.phases[0].color == "#123456"
+    window.close()
+
+
+def test_color_swatch_picker_selection(app):
+    picker = ColorSwatchPicker(current="#D4A54E")
+    assert picker.selected_color == "#D4A54E"
+
+    picker.findChild(QPushButton, "swatch-#5B78C7").click()
+
+    assert picker.selected_color == "#5B78C7"
+
+
+def test_action_dialog_never_defaults_to_the_destructive_action(app):
+    # A stray Enter/Return must never fire a delete; only a non-destructive
+    # confirm (a color pick, say) is allowed to be the default button.
+    danger_dialog = action_dialog.ActionDialog(
+        None, "Delete quest?", confirm_text="Delete", danger=True
+    )
+    assert danger_dialog.findChild(QPushButton, "primaryButton").isDefault() is False
+
+    safe_dialog = action_dialog.ActionDialog(None, "Apply", confirm_text="Apply", danger=False)
+    assert safe_dialog.findChild(QPushButton, "primaryButton").isDefault() is True
+
+
+def test_double_click_while_already_editing_does_not_discard_typed_text(app):
+    task_service, _ = service()
+    widget = TaskListWidget()
+    widget.set_document(task_service.document)
+    row = widget.findChild(TaskRow, "taskRow")
+
+    QTest.mouseDClick(row, Qt.MouseButton.LeftButton)
+    editor = row.findChild(QLineEdit, "taskTitleEditor")
+    editor.selectAll()
+    QTest.keyClicks(editor, "typed but not yet committed")
+
+    QTest.mouseDClick(row, Qt.MouseButton.LeftButton)  # a stray second double-click
+
+    assert editor.text() == "typed but not yet committed"
+
+
+def test_action_dialog_confirm_button_is_labeled_and_accepts(app):
+    # Constructed but never exec()'d/shown: a real exec() would block this
+    # headless test process, so we drive the dialog's buttons directly.
+    dialog = action_dialog.ActionDialog(
+        None, "Delete quest?", message="This cannot be undone.", confirm_text="Delete", danger=True
+    )
+
+    confirm_button = dialog.findChild(QPushButton, "primaryButton")
+    assert confirm_button.text() == "Delete"
+
+    confirm_button.click()
+
+    assert dialog.result() == QDialog.DialogCode.Accepted
+
+
+def test_choose_color_reflects_dialog_result(app, monkeypatch):
+    monkeypatch.setattr(
+        action_dialog.ActionDialog, "exec", lambda self: QDialog.DialogCode.Accepted
+    )
+    assert choose_color(None, "Choose category color", "#5B78C7") == "#5B78C7"
+
+    monkeypatch.setattr(
+        action_dialog.ActionDialog, "exec", lambda self: QDialog.DialogCode.Rejected
+    )
+    assert choose_color(None, "Choose category color", "#5B78C7") is None
+
+
+def test_confirm_delete_and_reset_use_action_dialog(app, monkeypatch):
+    monkeypatch.setattr(
+        action_dialog.ActionDialog, "exec", lambda self: QDialog.DialogCode.Accepted
+    )
+    assert dialogs.confirm_delete(None, "Delete?", "Sure?") is True
+    assert dialogs.confirm_reset(None) is True
+
+    monkeypatch.setattr(
+        action_dialog.ActionDialog, "exec", lambda self: QDialog.DialogCode.Rejected
+    )
+    assert dialogs.confirm_delete(None, "Delete?", "Sure?") is False
+    assert dialogs.confirm_reset(None) is False
 
 
 def test_position_is_clamped_to_nearest_visible_work_area():

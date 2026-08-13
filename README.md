@@ -68,18 +68,23 @@ python -m todo_buddy
 - Tick checkboxes with the mouse, or Tab over and hit Space/Enter.
 - Want to reorder quests? Drag a row by its `::` grip (or just the text) and
   drop it wherever — even under a different category. It saves right away.
-- The `...` next to a quest lets you edit or delete it.
-- The `...` next to a category lets you rename it, pick a color, or delete it
-  (along with everything in it).
+- Double-click a quest or a category title to rename it right there — no
+  pop-ups. Enter saves, Esc backs out, and clicking away just saves whatever
+  you typed.
+- Click the little color chip beside a category's title to give it a new
+  color from the palette (or pick your own with "Custom color…").
+- The `...` next to a quest or category is just for deleting it (categories
+  take everything in them along too) — it always double-checks with you
+  first.
 - Hit the `+ Add quest` row at the bottom of any category to type a new quest
   right there — no pop-ups. Enter adds it and keeps the box open for the next
   one, Esc backs out, and clicking away just saves whatever you typed.
 - The `...` in the header is the big menu: add categories, rename the card,
   mark everything complete/incomplete, or clear out finished quests.
-- `_` shrinks the whole card down to just the pixel cat, so Kumquat can hang
-  out on your desktop without the list. Click her to pop the card back open,
-  or drag her somewhere comfier first. The tray icon's `Show Todo Buddy`
-  brings the card back too.
+- `_` (or clicking Kumquat herself) shrinks the whole card down to just the
+  pixel cat, so she can hang out on your desktop without the list. Click her
+  to pop the card back open, or drag her somewhere comfier first. The tray
+  icon's `Show Todo Buddy` brings the card back too.
 - `Reset sample data...` double-checks with you first, and keeps your old JSON
   around as `tasks.backup-YYYYMMDD-HHMMSS.json` just in case.
 - `X` and `Exit` both close the app for real.
