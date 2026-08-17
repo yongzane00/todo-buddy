@@ -160,9 +160,36 @@ Don't drop the `--add-data "asset;asset"` bit — that's what packs the sprite
 sheets in. Skip it and pixel Kumquat gets swapped for her old Qt-painted
 stand-in.
 
-Your build lands in `dist\TodoBuddy\TodoBuddy.exe`. It's unsigned, so Windows
-SmartScreen might give it the side-eye on first launch — that's expected;
-code signing is a problem for another day.
+Your build lands in `dist\TodoBuddy\TodoBuddy.exe`, alongside the `_internal`
+folder it needs — copy or zip the whole `dist\TodoBuddy` folder together,
+not just the exe on its own.
+
+### Building the installer
+
+If you're handing the build to someone else, wrap it in a real installer
+instead of zipping the raw folder (or, worse, using PyInstaller's
+`--onefile` mode). A single self-extracting exe that unpacks itself into a
+temp folder and runs from there is exactly the shape antivirus tools and
+browser download scanners (Chrome's Safe Browsing included) flag as
+dropper-like — completely unrelated to what the app actually does, but it's
+a real, well-documented false-positive trigger. A conventional installer
+avoids that pattern entirely.
+
+```powershell
+winget install --id JRSoftware.InnoSetup -e
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer\todo_buddy.iss
+```
+
+That produces `dist\TodoBuddy-Setup-<version>.exe`: a normal per-user
+installer (no admin prompt) that installs to `%LOCALAPPDATA%\Programs`, adds
+a Start Menu entry, offers an optional desktop shortcut, and includes an
+uninstaller. `installer\todo_buddy.iss` is the source script — bump
+`MyAppVersion` there when cutting a new release.
+
+Either way it's still unsigned, so Windows SmartScreen may still give it the
+side-eye on first launch — click *More info > Run anyway*. Real code signing
+(e.g. Microsoft's Azure Artifact Signing, a few dollars a month) is the only
+way to remove that warning entirely; it's a problem for another day.
 
 ## Contributing
 
